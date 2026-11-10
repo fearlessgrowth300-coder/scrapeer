@@ -24,3 +24,20 @@ create table if not exists public.scrapeer_state (
 alter table public.scrapeer_accounts enable row level security;
 alter table public.scrapeer_state    enable row level security;
 revoke all on public.scrapeer_accounts, public.scrapeer_state from anon, authenticated;
+
+-- Live events from Resend webhooks (opened / delivered / clicked / bounced / complained / received)
+create table if not exists public.scrapeer_events (
+  id         bigserial primary key,
+  event_id   text unique,
+  user_id    uuid not null references auth.users (id) on delete cascade,
+  account_id uuid references public.scrapeer_accounts (id) on delete cascade,
+  type       text not null,
+  email_id   text,
+  contact    text,
+  subject    text,
+  at         timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+create index if not exists scrapeer_events_user on public.scrapeer_events (user_id, created_at desc);
+alter table public.scrapeer_events enable row level security;
+revoke all on public.scrapeer_events from anon, authenticated;

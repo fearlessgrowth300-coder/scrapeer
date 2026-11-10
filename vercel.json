@@ -17,6 +17,9 @@
     },
     "api/config.py": {
       "maxDuration": 30
+    },
+    "api/hook.py": {
+      "maxDuration": 15
     }
   }
 }

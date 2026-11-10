@@ -108,6 +108,14 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
 .composer textarea{flex:1;resize:none;height:44px;max-height:160px;border-radius:22px;padding:11px 16px;font:14px/1.4 system-ui,sans-serif}
 .composer button{border-radius:50%;width:44px;height:44px;padding:0;font-size:18px;flex-shrink:0}
 @media (max-width:820px){.chat{grid-template-columns:1fr;height:calc(100vh - 140px)}.chat.open .chat-list{display:none}.chat:not(.open) .chat-main{display:none}.chat-head .back{display:inline-block}}
+.toasts{position:fixed;right:16px;bottom:16px;z-index:50;display:flex;flex-direction:column;gap:8px;max-width:min(360px,calc(100vw - 32px))}
+.toast{display:flex;gap:10px;align-items:flex-start;text-align:left;background:var(--card);color:var(--ink);border:1px solid var(--line);border-left:4px solid var(--high);border-radius:12px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.18);font-weight:400;animation:pop .25s ease-out}
+.toast b{display:block}.toast .hint{margin:2px 0 0}
+@keyframes pop{from{transform:translateY(12px);opacity:0}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion:reduce){.toast{animation:none}}
+.avatar{position:relative}
+.avatar.live::after{content:"";position:absolute;right:0;bottom:0;width:11px;height:11px;border-radius:50%;background:#22c55e;border:2px solid var(--card)}
+.reading{color:#16a34a;font-weight:700}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.min.js"></script>
 </head>
@@ -115,7 +123,7 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
 <header><div class="wrap">
   <div class="logo">Scrape<span>er</span></div>
   <nav role="tablist" id="nav" hidden><button role="tab" id="tab-find" aria-selected="true">Find emails</button><button role="tab" id="tab-send" aria-selected="false">Send</button><button role="tab" id="tab-inbox" aria-selected="false">Inbox <span id="ib-badge"></span></button></nav>
-  <div id="who" hidden><span class="hint" id="who-email" style="margin:0"></span><button class="ghost" id="signout">Sign out</button></div>
+  <div id="who" hidden><button class="ghost" id="alerts" title="Get a desktop alert when someone opens or replies">🔔 Alerts</button><span class="hint" id="who-email" style="margin:0"></span><button class="ghost" id="signout">Sign out</button></div>
 </div></header>
 
 <!-- ============ SIGN IN ============ -->
@@ -306,6 +314,7 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
   </section>
 </main>
 
+<div class="toasts" id="toasts" aria-live="polite"></div>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -614,7 +623,7 @@ $("acc-add").onclick = async () => {
   const d = await addAccount(a);
   $("acc-add").disabled = false;
   if (d.error) return setMsg("acc-msg", "Not added: " + d.error, "err");
-  renderAccounts(); $("acc-pass").value = "";  // the secret now lives only (encrypted) on the server
+  renderAccounts(); $("acc-pass").value = ""; hooksChecked = false; pollEvents();  // the secret now lives only (encrypted) on the server
   if (a.provider !== "resend") $("acc-key").value = "";
   setMsg("acc-msg", `✓ Added ${d.account.label} (saved encrypted to your account). Add another service to send more per day.`, "ok");
 };
@@ -828,9 +837,9 @@ function renderConvos() {
   $("ib-convos").innerHTML = list.map(c => {
     const l = c.last, prev = bodies[l.id] || l.text || l.subject || (l.dir === "in" ? "New reply" : "");
     return `<button type="button" class="convo${c.unread ? " has-unread" : ""}" data-email="${esc(c.email)}" aria-current="${c.email === activeContact}">
-      <div class="avatar" aria-hidden="true">${esc(c.name[0].toUpperCase())}</div>
+      <div class="avatar${isReading(c.email) ? " live" : ""}" aria-hidden="true">${esc(c.name[0].toUpperCase())}</div>
       <div class="convo-body"><div class="convo-top"><span class="convo-name">${esc(c.name)}</span><span class="convo-time">${l.at ? listTime(l.at) : ""}</span></div>
-      <div class="convo-bottom"><span class="convo-prev">${l.dir === "out" ? (l.status === "other" ? "✓" : TICK[l.status] || "✓") + " " : ""}${esc(String(prev).split("\n")[0])}</span>${c.unread ? `<span class="unread">${c.unread}</span>` : ""}</div></div></button>`;
+      <div class="convo-bottom"><span class="convo-prev">${isReading(c.email) ? '<span class="reading">👀 Reading now</span> · ' : ""}${l.dir === "out" ? (l.status === "other" ? "✓" : TICK[l.status] || "✓") + " " : ""}${esc(String(prev).split("\n")[0])}</span>${c.unread ? `<span class="unread">${c.unread}</span>` : ""}</div></div></button>`;
   }).join("") || `<p class="empty" style="padding:30px 12px">${q ? "No matches." : "No conversations yet — people you email show up here."}</p>`;
 }
 $("ib-convos").onclick = e => { const b = e.target.closest("[data-email]"); if (b) openConvo(b.dataset.email); };
@@ -850,10 +859,12 @@ function renderThread(scroll) {
   const c = convos.get(activeContact); if (!c) return;
   const box = $("msgs"), atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
   $("chat-avatar").textContent = c.name[0].toUpperCase(); $("chat-name").textContent = c.name;
+  $("chat-avatar").classList.toggle("live", !!isReading(c.email));
   const lastOut = [...c.msgs].reverse().find(m => m.dir === "out"), lastIn = [...c.msgs].reverse().find(m => m.dir === "in");
   $("chat-sub").textContent = [c.name !== c.email ? c.email : "", lastIn && (!lastOut || lastIn.at > lastOut.at) ? "Replied " + listTime(lastIn.at)
     : lastOut ? (lastOut.status === "other" ? "Sent via " + lastOut.via.split(" · ")[0] : STATUS_WORD[lastOut.status] || "Sent") + " · " + listTime(lastOut.at) : ""]
     .filter(Boolean).join(" · ");
+  if (lastSeen[c.email]) $("chat-sub").innerHTML = (isReading(c.email) ? '<span class="reading">👀 Reading now</span>' : esc(seenText(c.email))) + " · " + esc($("chat-sub").textContent);
   let html = "", lastDay = "", lastSubj = null;
   for (const m of c.msgs) {
     const day = m.at ? dayLabel(m.at) : "";
@@ -896,6 +907,66 @@ $("composer").onsubmit = async e => {
   msg.status = "sent"; if (d.id) bodies[d.id] = text;
   if (acc.provider === "resend") { pending.push({to: c.email, msg}); pending = pending.slice(-20); }
   renderThread(); setTimeout(() => loadInbox(true), 4000);
+};
+
+/* ---------- LIVE: "Reading now", "Last seen", pop-ups (from signed Resend webhooks) ---------- */
+// Approximate like WhatsApp's blue ticks: Apple Mail can "open" emails by itself, and apps that block images hide opens.
+const READING_MS = 3 * 60 * 1000;
+let lastSeen = {}, eventsSince = null, liveTimer = null, hooksChecked = false;
+const ago = t => { const s = Math.max(0, (Date.now() - t) / 1000);
+  return s < 60 ? "just now" : s < 3600 ? Math.round(s / 60) + " min ago" : s < 86400 ? Math.round(s / 3600) + " h ago" : dayLabel(t); };
+const isReading = email => lastSeen[email] && Date.now() - lastSeen[email] < READING_MS;
+const seenText = email => !lastSeen[email] ? "" : isReading(email) ? "👀 Reading now" : "Last seen " + ago(lastSeen[email]);
+
+function toast(title, sub, email) {
+  const t = Object.assign(document.createElement("button"), {type: "button", className: "toast"});
+  t.innerHTML = `<div class="avatar" aria-hidden="true" style="width:34px;height:34px">${esc((email || "?")[0].toUpperCase())}</div><div><b>${esc(title)}</b><div class="hint">${esc(sub)}</div></div>`;
+  t.onclick = () => { t.remove(); if (email) { showTab("inbox"); setTimeout(() => convos.has(email) && openConvo(email), 600); } };
+  $("toasts").append(t); setTimeout(() => t.remove(), 12000);
+  if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+    const n = new Notification(title, {body: sub, tag: (email || "") + title}); n.onclick = () => { window.focus(); t.onclick(); n.close(); };
+  }
+}
+
+async function pollEvents() {
+  if (!signedIn) return;
+  if (!hooksChecked) {  // register the live webhook on each Resend account (once per session; no-op if already done)
+    hooksChecked = true;
+    const h = await post("/api/me", {action: "ensure_hooks"}, 1);
+    for (const x of h.hooks || []) if (!x.ok) console.warn("live updates not set up for", x.label, x.error);
+  }
+  const first = eventsSince === null;
+  const d = await post("/api/me", {action: "events", since: eventsSince || new Date(Date.now() - 7 * 864e5).toISOString()}, 0);
+  if (d.error || !d.events) return;
+  let inboxChanged = false;
+  for (const e of d.events) {
+    eventsSince = e.created_at;
+    const at = tsOf(e.at) || tsOf(e.created_at), who = e.contact || "", subj = e.subject ? `“${e.subject}”` : "your email";
+    if (e.type === "email.opened" || e.type === "email.clicked") lastSeen[who] = Math.max(lastSeen[who] || 0, at);
+    if (e.type === "email.received") inboxChanged = true;
+    if (first) continue;  // history: no pop-ups for the past
+    if (e.type === "email.opened") toast(`👀 ${who} opened your email`, `${subj} · follow up while they're reading`, who);
+    else if (e.type === "email.clicked") toast(`🔗 ${who} clicked a link`, subj, who);
+    else if (e.type === "email.received") toast(`💬 New reply from ${who}`, subj, who);
+    else if (e.type === "email.bounced") toast(`⚠ Email to ${who} bounced`, "That address doesn't work — it won't be emailed again.", who);
+    else if (e.type === "email.complained") toast(`⚠ ${who} marked you as spam`, "Added to do-not-email.", who);
+    if (e.type === "email.bounced" || e.type === "email.complained") {  // protect the account: never email them again
+      const list = $("dne").value.trim(); if (!list.toLowerCase().includes(who)) { $("dne").value = (list ? list + "\n" : "") + who; store.set("scrapeer-dne", $("dne").value); }
+    }
+  }
+  if (!first && d.events.length && !$("inbox").hidden) inboxChanged ? loadInbox(true) : (renderConvos(), renderThread());
+  else if (d.events.length) { renderConvos(); if (activeContact) renderThread(); }
+}
+function startLive() {
+  clearInterval(liveTimer); pollEvents();
+  // every 10s while you're looking, every 45s in the background (pop-ups/desktop alerts still arrive)
+  let n = 0; liveTimer = setInterval(() => { n++; if (!document.hidden || n % 4 === 0) pollEvents(); if (!$("inbox").hidden) { renderConvos(); if (activeContact) renderThread(); } }, 10000);
+}
+$("alerts").onclick = async () => {
+  if (!("Notification" in window)) return toast("Desktop alerts aren't supported in this browser", "Pop-ups inside the app still work.");
+  const p = await Notification.requestPermission();
+  $("alerts").hidden = p === "granted";
+  toast(p === "granted" ? "🔔 Desktop alerts on" : "Desktop alerts blocked", p === "granted" ? "You'll be told when someone opens or replies, even in another tab." : "Allow notifications for this site in your browser settings.");
 };
 
 /* ---------- restore ---------- */
@@ -992,6 +1063,8 @@ async function enterApp(session) {
   $("nav").hidden = $("who").hidden = false;
   await migrateLocal();
   restoreUI();
+  $("alerts").hidden = !("Notification" in window) || Notification.permission === "granted";
+  startLive();
 }
 
 (async function boot() {
