@@ -6,7 +6,7 @@ Paste websites, get the **real** contact emails: crawled from contact/about/team
 - `api/scrape.py` — Vercel Python function, `POST /api/scrape {"site": "example.com"}`
 - `api/send.py` — `POST /api/send`: sends one email via Resend (your verified domain) or the user's own mailbox (SMTP + app password); the account is sent per request, never stored
 - `api/domain.py` — `POST /api/domain`: adds a member's domain to their own Resend account and returns the DNS records + verification status (in-app setup, no Resend dashboard needed after the API key)
-- `api/track.py` — `POST /api/track`: delivery status (delivered/opened/bounced/spam) of sent emails + replies received, read live from each member's Resend account(s)
+- `api/track.py` — `POST /api/track`: chat-style inbox — sent emails with delivery status, replies, and message bodies (quoted history stripped), read live from the user's Resend account(s)
 - `api/_scout.py` — the engine (`python api/_scout.py` runs its self-check)
 
 Deploys on Vercel with zero config: import the repo, framework preset "Other".
