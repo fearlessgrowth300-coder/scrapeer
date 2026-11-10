@@ -2,7 +2,7 @@
 service key — tables have RLS on and no policies, so browsers can never read them) and AES-256-GCM
 encryption for API keys/passwords at rest.
 
-Env (Vercel): SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, SCRAPEER_SECRET (base64, 32 bytes).
+Env (Vercel): SUPABASE_URL, SUPABASE_ANON_KEY (anon or sb_publishable_), SUPABASE_SERVICE_KEY (service_role or sb_secret_), SCRAPEER_SECRET (base64, 32 bytes).
 """
 import base64
 import json
@@ -55,8 +55,10 @@ def require_user(headers):
 def db(method, table, query=None, body=None, prefer="return=representation"):
     """PostgREST call with the service key. query: dict of PostgREST filters, e.g. {"user_id": "eq.<id>"}."""
     url = f"{SUPABASE_URL}/rest/v1/{table}" + ("?" + urllib.parse.urlencode(query) if query else "")
-    code, data = _http(method, url, {"apikey": SERVICE_KEY, "Authorization": "Bearer " + SERVICE_KEY,
-                                     "Content-Type": "application/json", "Prefer": prefer}, body)
+    headers = {"apikey": SERVICE_KEY, "Content-Type": "application/json", "Prefer": prefer}
+    if not SERVICE_KEY.startswith("sb_"):  # legacy service_role JWT; new sb_secret_ keys must not be sent as Bearer
+        headers["Authorization"] = "Bearer " + SERVICE_KEY
+    code, data = _http(method, url, headers, body)
     if code >= 400:
         msg = (data or {}).get("message", "") if isinstance(data, dict) else ""
         raise Bad("Database error" + (f": {msg}" if msg else f" ({code})") +
