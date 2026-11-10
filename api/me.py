@@ -19,7 +19,7 @@ from _auth import Bad, db, decrypt, encrypt, serve  # noqa: E402
 NAMES = {"brevo": "Brevo", "mailjet": "Mailjet", "resend": "Resend", "smtp": "Email"}
 FIELDS = ("provider", "api_key", "from", "reply_to", "user", "pass", "from_name", "host", "port", "cap", "domain")
 PUBLIC = ("from", "reply_to", "from_name", "domain")  # safe to send back to the browser
-STATE_KEYS = ("log", "sent", "dne", "draft", "read", "reply")
+STATE_KEYS = ("log", "sent", "dne", "draft", "read", "reply", "order")
 APP_URL = os.environ.get("APP_URL", "https://scrapeer-brown.vercel.app").rstrip("/")
 HOOK_EVENTS = ["email.bounced", "email.clicked", "email.complained", "email.delivered", "email.opened", "email.received"]
 

@@ -320,7 +320,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 // Private data (sent log, already-emailed, do-not-email, drafts, read replies) lives in your account on the server;
 // only harmless UI preferences stay in this browser.
-const SYNCED = {"scrapeer-log": "log", "scrapeer-sent": "sent", "scrapeer-dne": "dne", "scrapeer-draft": "draft", "scrapeer-read": "read", "scrapeer-reply": "reply"};
+const SYNCED = {"scrapeer-log": "log", "scrapeer-sent": "sent", "scrapeer-dne": "dne", "scrapeer-draft": "draft", "scrapeer-read": "read", "scrapeer-reply": "reply", "scrapeer-order": "order"};
 let state = {}, saveTimer = null, sb = null, signedIn = false;
 const local = {get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
@@ -598,15 +598,22 @@ $("acc-provider").addEventListener("change", () => { $("acc-cap").value = ""; sh
 let accounts = [];
 const sentTodayVia = label => log.filter(l => l.date === today() && l.status === "sent" && l.via === label).length;
 function renderAccounts() {
-  $("acct-list").innerHTML = accounts.map((a, i) => `<tr><td class="email">${esc(a.label)}</td>
-    <td>${sentTodayVia(a.label)} / ${a.cap}</td><td><button class="ghost" type="button" data-rm="${i}" aria-label="Remove">✕</button></td></tr>`).join("")
+  const pool = sendingPool(), next = pool.find(a => sentTodayVia(a.label) < a.cap);
+  $("acct-list").innerHTML = pool.map((a, i) => `<tr><td class="email">${i + 1}. ${esc(a.label)}${a === next ? ' <span class="pill sent">in use</span>' : sentTodayVia(a.label) >= a.cap ? ' <span class="pill low">full today</span>' : ""}</td>
+    <td>${sentTodayVia(a.label)} / ${a.cap}</td><td style="white-space:nowrap">${i ? `<button class="ghost" type="button" data-up="${esc(a.id)}" aria-label="Use earlier" title="Use this one earlier">↑</button> ` : ""}<button class="ghost" type="button" data-rm="${esc(a.id)}" aria-label="Remove">✕</button></td></tr>`).join("")
     || `<tr><td colspan="3" class="empty" style="padding:14px">No accounts added yet.</td></tr>`;
-  const total = accounts.reduce((s, a) => s + a.cap, 0);
-  $("acct-total").textContent = accounts.length ? `${accounts.length} account(s) · up to ${total} emails/day` : "";
+  const total = pool.reduce((s, a) => s + a.cap, 0);
+  $("acct-total").textContent = pool.length ? `${pool.length} account(s) · up to ${total} emails/day · used in this order: when one is full the next takes over` : "";
 }
 $("acct-list").onclick = async e => {
-  const i = e.target.dataset?.rm; if (i == null) return;
-  const a = accounts[i]; if (!confirm("Remove " + a.label + "?")) return;
+  const up = e.target.dataset?.up;
+  if (up) {
+    const ids = sendingPool().map(a => a.id), i = ids.indexOf(up);
+    if (i > 0) { [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]]; store.set("scrapeer-order", ids); renderAccounts(); }
+    return;
+  }
+  const a = accounts.find(x => x.id === e.target.dataset?.rm); if (!a) return;
+  if (!confirm("Remove " + a.label + "?")) return;
   const d = await post("/api/me", {action: "remove_account", id: a.id}, 1);
   if (d.error) return setMsg("acc-msg", d.error, "err");
   accounts = accounts.filter(x => x.id !== a.id); renderAccounts();
@@ -627,7 +634,10 @@ $("acc-add").onclick = async () => {
   if (a.provider !== "resend") $("acc-key").value = "";
   setMsg("acc-msg", `✓ Added ${d.account.label} (saved encrypted to your account). Add another service to send more per day.`, "ok");
 };
-const sendingPool = () => accounts;
+const sendingPool = () => {  // your order (↑ buttons), then oldest first
+  const order = store.get("scrapeer-order", []), pos = a => { const i = order.indexOf(a.id); return i < 0 ? 1e6 + accounts.indexOf(a) : i; };
+  return [...accounts].sort((a, b) => pos(a) - pos(b));
+};
 // the form itself is remembered on this device WITHOUT keys/passwords
 function saveAccount() { local.set("scrapeer-acc", Object.fromEntries(ACC.filter(k => k !== "key" && k !== "pass").map(k => [k, $("acc-" + k).value]))); }
 for (const k of ACC) $("acc-" + k).addEventListener("input", saveAccount);
@@ -702,16 +712,15 @@ function checkReady(r) {
 $("send-test").onclick = async () => {
   const problem = checkReady(recipients[pvIdx] || enrich({email: "you@example.com"}));
   if (problem) return setMsg("send-msg", problem, "err");
-  $("send-test").disabled = true;
-  const out = [];
-  for (const a of sendingPool()) {  // one test per account, so you see which ones land in spam
-    const me = $("who-email").textContent.trim() || myAddress(a), sample = recipients[pvIdx] || enrich({email: me});
-    setMsg("send-msg", `Sending test via ${a.label} to ${me}…`);
-    const m = compose(sample), d = await post("/api/send", {account_id: a.id, to: me, subject: `[TEST via ${PROV[a.provider]?.name}] ` + m.subject, body: m.body, reply_to: replyAddr()}, 0);
-    out.push(d.error ? `✗ ${a.label}: ${d.error}` : `✓ ${a.label}`);
-  }
+  // one test, through the account that would send next (to check another account, move it to the top with ↑)
+  const a = sendingPool().find(x => sentTodayVia(x.label) < x.cap) || sendingPool()[0];
+  const me = $("who-email").textContent.trim() || myAddress(a), sample = recipients[pvIdx] || enrich({email: me});
+  $("send-test").disabled = true; setMsg("send-msg", `Sending test via ${a.label} to ${me}…`);
+  const m = compose(sample), d = await post("/api/send", {account_id: a.id, to: me, subject: "[TEST] " + m.subject, body: m.body, reply_to: replyAddr()}, 0);
   $("send-test").disabled = false;
-  setMsg("send-msg", out.join("  ·  ") + " — check your inbox and spam folder.", out.some(x => x[0] === "✗") ? "err" : "ok");
+  if (d.error) return setMsg("send-msg", `✗ ${a.label}: ${d.error}`, "err");
+  record(me, "test", "", a.label);
+  setMsg("send-msg", `✓ Test sent via ${a.label} to ${me} — check your inbox (and spam). To test another account, move it to the top with ↑.`, "ok");
 };
 
 let sending = false, wake = null;
@@ -723,38 +732,41 @@ $("send-start").onclick = async () => {
   if (!queue.length) return setMsg("send-msg", "No one left to email (everyone is already emailed or on the do-not-email list).", "err");
   const problem = checkReady(queue[0]); if (problem) return setMsg("send-msg", problem, "err");
   const [lo, hi] = ($("delay").value.match(/\d+/g) || [15, 30]).map(Number), cap = Number($("cap").value) || Infinity;
-  const pool = sendingPool(), dead = new Set();
-  if (!confirm(`Send to ${queue.length} people, rotating through ${pool.length} account(s)?`)) return;
+  const pool = sendingPool(), full = new Set(), broken = new Set();
+  if (!confirm(`Send to ${queue.length} people? Uses ${pool[0].label} first; when it's full for the day the next account takes over.`)) return;
   sending = true; $("send-start").disabled = $("send-test").disabled = true; $("send-stop").disabled = false;
-  let sent = 0, fails = 0, done = 0, consecutiveFails = 0, turn = 0, stopReason = "";
-  // next account (round-robin) that still has room today and hasn't failed to log in
-  const pick = () => {
-    for (let i = 0; i < pool.length; i++) {
-      const a = pool[(turn + i) % pool.length];
-      if (!dead.has(a.label) && sentTodayVia(a.label) < a.cap) { turn = (turn + i + 1) % pool.length; return a; }
-    }
-    return null;
+  let sent = 0, fails = 0, done = 0, consecutiveFails = 0, stopReason = "", i = 0;
+  // first account in your order that still has room today (and works) — fill it, then move to the next
+  const pick = () => pool.find(a => !full.has(a.id) && !broken.has(a.id) && sentTodayVia(a.label) < a.cap) || null;
+  // daily counts reset at midnight UTC (that's when the providers reset too); +1 min margin
+  const waitForTomorrow = async why => {
+    const until = new Date(); until.setUTCHours(24, 1, 0, 0);
+    setMsg("send-msg", `${why} ${sent} sent so far. Continuing automatically at ${until.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})} on ${until.toLocaleDateString()} — keep this tab open (or press Start again tomorrow; nobody gets emailed twice).`, "err");
+    renderAccounts(); await sleep(Math.max(60000, until - Date.now())); full.clear(); renderAccounts();
   };
-  for (const r of queue) {
-    if (!sending) break;
+  while (i < queue.length && sending) {
+    const r = queue[i];
+    if (sentMap()[r.email] || dneSet().has(r.email)) { i++; done++; continue; }  // bounced/spam-flagged meanwhile
     const sentToday = log.filter(l => l.date === today() && l.status === "sent").length;
-    if (sentToday >= cap) { stopReason = `Overall limit of ${cap} reached — continue tomorrow (already-emailed people are skipped).`; break; }
+    if (sentToday >= cap) { await waitForTomorrow(`Your overall limit of ${cap} for today is reached.`); continue; }
     let d, a;
-    while ((a = pick())) {  // an account that can't log in is dropped and the same person goes to the next account
+    while ((a = pick())) {  // a full or broken account hands the SAME person to the next account
       setMsg("send-msg", `Sending to ${r.email} via ${a.label}…`);
       const m = compose(r);
       d = await post("/api/send", {account_id: a.id, to: r.email, subject: m.subject, body: m.body, reply_to: replyAddr()}, 1);
-      if (d.error && /Login refused|connect to|API key|domain|verified|not allowed|suspend|limit|quota/i.test(d.error)) {
-        dead.add(a.label); record(r.email, "failed", "account dropped: " + d.error, a.label); continue;
-      }
+      if (d.error && /daily|limit|quota|exceeded/i.test(d.error)) { full.add(a.id); record(r.email, "failed", "account full today: " + d.error, a.label); continue; }
+      if (d.error && /Login refused|connect to|API key|domain|verified|not allowed|suspend/i.test(d.error)) { broken.add(a.id); record(r.email, "failed", "account skipped: " + d.error, a.label); continue; }
       break;
     }
-    if (!a) { stopReason = dead.size ? "All accounts are full for today or failed — see the log." : "All accounts hit today's limit — continue tomorrow."; break; }
+    if (!a) {
+      if (broken.size === pool.length) { stopReason = "None of your accounts can send right now — check them in step 1 (details in the log)."; break; }
+      await waitForTomorrow("All accounts reached today's limit."); continue;
+    }
     if (d.error) {
       fails++; consecutiveFails++; record(r.email, "failed", d.error, a.label);
       if (consecutiveFails >= 5) { stopReason = "Stopped after 5 failures in a row: " + d.error; break; }
     } else { sent++; consecutiveFails = 0; { const m = compose(r); record(r.email, "sent", "", a.label, m.subject, m.body); } }
-    done++;
+    i++; done++;
     $("st-sent").textContent = sent; $("st-failed").textContent = fails; $("send-fill").style.width = (100 * done / queue.length) + "%";
     if (done < queue.length && sending) {
       const wait = Math.round(lo + Math.random() * Math.max(0, (hi || lo) - lo));
