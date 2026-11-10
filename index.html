@@ -122,9 +122,18 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
           <option value="smtp">Email account — Gmail, Outlook, Google Workspace…</option>
         </select></div>
       <div id="resend-fields">
-        <div class="field"><label for="acc-key">Resend API key</label><input type="password" id="acc-key" placeholder="re_…" autocomplete="off">
-          <p class="hint"><a href="https://resend.com/api-keys" target="_blank" rel="noopener">Create a key</a> and <a href="https://resend.com/domains" target="_blank" rel="noopener">verify your domain</a> first.</p></div>
-        <div class="field"><label for="acc-from">From address (on your verified domain)</label><input type="email" id="acc-from" placeholder="jane@yourdomain.com"></div>
+        <div class="field"><label for="acc-key">A. Resend API key</label><input type="password" id="acc-key" placeholder="re_…" autocomplete="off">
+          <p class="hint">Free <a href="https://resend.com/signup" target="_blank" rel="noopener">Resend account</a> → <a href="https://resend.com/api-keys" target="_blank" rel="noopener">API Keys</a> → Create, choose <b>Full access</b>, paste it here.</p></div>
+        <div class="field"><label for="acc-domain">B. Your domain</label>
+          <div style="display:flex;gap:8px"><input type="text" id="acc-domain" placeholder="yourdomain.com" autocomplete="off"><button class="ghost" type="button" id="dom-connect">Connect</button></div></div>
+        <div id="dns" hidden>
+          <p class="hint" style="margin:0 0 8px">C. Log in where you bought the domain (GoDaddy, Namecheap, Cloudflare…) → <b>DNS</b> → add each record below. Click a value to copy it.</p>
+          <div class="tablewrap"><table><thead><tr><th>Type</th><th>Name / Host</th><th>Value</th><th>Status</th></tr></thead><tbody id="dns-rows"></tbody></table></div>
+          <p class="hint">If your provider asks for the full name, add <b id="dns-suffix"></b> to the end. Leave TTL on Auto.</p>
+          <div class="btns" style="margin-top:8px"><button class="ghost" type="button" id="dom-check">I've added them — check now</button></div>
+        </div>
+        <div class="msg" id="dom-msg" role="status"></div>
+        <div class="field"><label for="acc-from">From address</label><input type="email" id="acc-from" placeholder="jane@yourdomain.com"></div>
         <div class="field"><label for="acc-replyto">Replies go to</label><input type="email" id="acc-replyto" placeholder="your real inbox, e.g. jane@gmail.com">
           <p class="hint">Resend only sends — replies need a real inbox to land in.</p></div>
       </div>
@@ -351,7 +360,48 @@ $("pv-next").onclick = () => { pvIdx = Math.min(recipients.length - 1, pvIdx + 1
 for (const id of ["subject", "body", "footer", "delay", "cap"]) $(id).addEventListener("input", () => { saveDraft(); renderPreview(); });
 
 /* ---------- SEND: account ---------- */
-const ACC = ["provider", "key", "from", "replyto", "user", "pass", "name", "host", "port"];
+const ACC = ["provider", "key", "domain", "from", "replyto", "user", "pass", "name", "host", "port"];
+
+/* Resend domain setup: add the domain to the member's own Resend account, show DNS records, check until verified */
+const cleanDomain = s => s.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split(/[\/?#]/)[0];
+const STATUS_CLASS = {verified: "sent", failed: "failed", temporary_failure: "failed"};
+let autoCheck = null, autoChecks = 0;
+function renderDNS(d) {
+  $("dns").hidden = false; $("dns-suffix").textContent = "." + d.name;
+  $("dns-rows").innerHTML = d.records.map(r => {
+    const value = String(r.value).replace(/^"(.*)"$/, "$1"), st = r.status || "not_started";
+    return `<tr><td>${esc(r.type)}${r.priority != null ? " <span class='hint'>prio " + esc(r.priority) + "</span>" : ""}<div class="hint">${esc(r.record)}</div></td>
+      <td><button type="button" class="ghost copyv" data-copy="${esc(r.name)}" title="Copy">${esc(r.name)}</button></td>
+      <td><button type="button" class="ghost copyv" data-copy="${esc(value)}" title="Copy" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block">${esc(value)}</button></td>
+      <td><span class="pill ${STATUS_CLASS[st] || "medium"}">${esc(st.replace(/_/g, " "))}</span></td></tr>`;
+  }).join("");
+}
+$("dns-rows").onclick = async e => {
+  const b = e.target.closest(".copyv"); if (!b) return;
+  await navigator.clipboard.writeText(b.dataset.copy); const t = b.textContent; b.textContent = "Copied!"; setTimeout(() => b.textContent = t, 1200);
+};
+async function domainStep(action, quiet) {
+  const key = $("acc-key").value.trim(), domain = cleanDomain($("acc-domain").value);
+  if (!key || !domain) { if (!quiet) setMsg("dom-msg", "Paste your API key and type your domain first.", "err"); return; }
+  $("acc-domain").value = domain; saveAccount();
+  if (!quiet) setMsg("dom-msg", action === "check" ? "Checking DNS…" : "Connecting to Resend…");
+  $("dom-connect").disabled = $("dom-check").disabled = true;
+  const d = await post("/api/domain", {api_key: key, domain, action}, 1);
+  $("dom-connect").disabled = $("dom-check").disabled = false;
+  if (d.error) { clearInterval(autoCheck); return setMsg("dom-msg", d.error, "err"); }
+  renderDNS(d);
+  if (d.status === "verified") {
+    clearInterval(autoCheck);
+    if (!$("acc-from").value.trim().endsWith("@" + domain)) { $("acc-from").value = "hello@" + domain; saveAccount(); }
+    setMsg("dom-msg", `✓ ${domain} is verified — you're ready to send.`, "ok");
+  } else {
+    setMsg("dom-msg", d.status === "failed" ? "Resend couldn't find the records. Double-check each one, then check again."
+      : "Waiting for DNS. After you add the records this usually takes a few minutes (sometimes a few hours). We keep checking while this page is open.");
+    if (!autoCheck) { autoChecks = 0; autoCheck = setInterval(() => { if (++autoChecks > 30) clearInterval(autoCheck); else domainStep("check", true); }, 60000); }
+  }
+}
+$("dom-connect").onclick = () => domainStep("connect");
+$("dom-check").onclick = () => domainStep("check");
 function account() {
   return {provider: $("acc-provider").value, api_key: $("acc-key").value.trim(), from: $("acc-from").value.trim(),
           reply_to: $("acc-replyto").value.trim(), user: $("acc-user").value.trim(), pass: $("acc-pass").value,
@@ -463,6 +513,7 @@ function saveDraft() { store.set("scrapeer-draft", {recips: $("recips").value, s
         else acc = JSON.parse(sessionStorage.getItem("scrapeer-acc")); } catch {}
   if (acc) for (const k of ACC) if (acc[k] != null && acc[k] !== "") $("acc-" + k).value = acc[k];
   showProvider();
+  if ($("acc-provider").value === "resend" && $("acc-key").value && $("acc-domain").value) domainStep("connect", true);
   parseRecips(); renderLog();
   let tab = "find"; try { tab = localStorage.getItem("scrapeer-tab") || "find"; } catch {}
   showTab(tab);
