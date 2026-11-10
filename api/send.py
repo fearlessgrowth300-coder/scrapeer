@@ -48,11 +48,15 @@ def connect(acct):
         server = smtplib.SMTP_SSL(host, port, context=ctx, timeout=20) if port == 465 else smtplib.SMTP(host, port, timeout=20)
         if port != 465:
             server.starttls(context=ctx)
-        server.login(user, str(acct["pass"]).replace(" ", "") if domain in ("gmail.com", "googlemail.com") else str(acct["pass"]))
-    except smtplib.SMTPAuthenticationError:
-        raise Bad("Login refused. Use an App Password (not your normal password), and check 2-step verification is on.")
     except (OSError, smtplib.SMTPException) as e:
         raise Bad(f"Couldn't connect to {host}:{port} ({type(e).__name__}).")
+    try:
+        server.login(user, str(acct["pass"]).replace(" ", "") if domain in ("gmail.com", "googlemail.com") else str(acct["pass"]))
+    except (smtplib.SMTPAuthenticationError, smtplib.SMTPServerDisconnected):
+        # Gmail hangs up after the first wrong password, so smtplib's retry shows up as "disconnected"
+        raise Bad("Login refused. Use an App Password (not your normal password), and check 2-step verification is on.")
+    except (OSError, smtplib.SMTPException) as e:
+        raise Bad(f"Mail server error during login ({type(e).__name__}).")
     return server, user
 
 
