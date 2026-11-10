@@ -569,6 +569,7 @@ async function domainStep(action, quiet) {
     const from = $("acc-from").value.trim();
     if (!from.endsWith("@" + domain) || from === "hello@" + domain) { $("acc-from").value = nameLocal() + "@" + domain; saveAccount(); }
     updateFromPreview();
+    if (d.receiving_error) return setMsg("dom-msg", `✓ ${domain} is verified for sending, but Resend wouldn't turn on receiving: ${d.receiving_error}`, "err");
     setMsg("dom-msg", `✓ ${domain} is verified — you're ready to send. ` + (d.receiving
       ? "Replies will show in the Inbox tab (leave 'Replies go to' empty)."
       : "Your domain already has its own inbox, so replies go there (or to 'Replies go to')."), "ok");

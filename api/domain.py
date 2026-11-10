@@ -140,6 +140,7 @@ def handle(body, user):
     if body.get("action") in ("reply_setup", "reply_check"):
         return reply_domain(key, domain, body["action"] == "reply_check")
     settings, receive = wanted_settings(domain)
+    receiving_error = ""
     found = next((d for d in ok(*resend_api(key, "GET", "/domains")).get("data", []) if d.get("name") == domain), None)
     if not found:
         code, data = resend_api(key, "POST", "/domains", {"name": domain, **settings})
@@ -150,13 +151,18 @@ def handle(body, user):
     else:
         cur = ok(*resend_api(key, "GET", f"/domains/{found['id']}"))
         caps = cur.get("capabilities") or {}
-        if (not cur.get("open_tracking") or not cur.get("tracking_subdomain")
-                or caps.get("receiving") != settings["capabilities"]["receiving"]):
-            code, _ = resend_api(key, "PATCH", f"/domains/{found['id']}", settings)  # best effort: never block setup
-            receive = receive and code < 400
+        # change one thing at a time: one rejected setting must not silently cancel the others
+        if not cur.get("open_tracking") or not cur.get("tracking_subdomain"):
+            resend_api(key, "PATCH", f"/domains/{found['id']}", {"open_tracking": True, "tracking_subdomain": "links"})
+        want = settings["capabilities"]["receiving"]
+        if caps.get("receiving") != want:
+            code, data = resend_api(key, "PATCH", f"/domains/{found['id']}",
+                                    {"capabilities": {"sending": caps.get("sending") or "enabled", "receiving": want}})
+            if code >= 400:
+                receive, receiving_error = False, str((data or {}).get("message") or f"error {code}")[:200]
         if body.get("action") == "check":
             ok(*resend_api(key, "POST", f"/domains/{found['id']}/verify", {}))
-    return domain_info(key, found["id"], receive)
+    return {**domain_info(key, found["id"], receive), **({"receiving_error": receiving_error} if receiving_error else {})}
 
 
 def reply_domain(key, domain, check):
