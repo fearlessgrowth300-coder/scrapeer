@@ -6,6 +6,7 @@
 
 The account is sent with each request and never stored on the server.
 """
+import html as htmllib
 import json
 import os
 import smtplib
@@ -117,8 +118,14 @@ def send_resend(body):
     if not subject or not text.strip():
         raise Bad("Subject and message can't be empty.")
     unsub = reply_to or sender
+    # plain-looking HTML twin of the text: Resend needs HTML to add its open-tracking pixel
+    html = "<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.5\">" + \
+        htmllib.escape(text).replace("\n", "<br>") + "</div>"
     payload = {"from": formataddr((one_line(acct.get("from_name"), 80), sender)), "to": [to], "subject": subject,
-               "text": text, "headers": {"List-Unsubscribe": f"<mailto:{unsub}?subject=unsubscribe>"}}
+               "text": text, "html": html, "headers": {"List-Unsubscribe": f"<mailto:{unsub}?subject=unsubscribe>"}}
+    in_reply_to = one_line(body.get("in_reply_to"), 300)
+    if in_reply_to.startswith("<") and in_reply_to.endswith(">"):  # answering a reply: keep it in the same thread
+        payload["headers"].update({"In-Reply-To": in_reply_to, "References": in_reply_to})
     if reply_to:
         payload["reply_to"] = reply_to
     code, data = resend_api(key, "POST", "/emails", payload)

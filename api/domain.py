@@ -38,13 +38,33 @@ def has_dmarc(domain):
         return False
 
 
-def domain_info(key, domain_id):
+def other_mailbox(domain):
+    """True if the domain already receives mail somewhere else (Gmail/Outlook/Zoho...): then we must not
+    point its MX at Resend, or their existing inbox would stop getting mail."""
+    try:
+        url = "https://dns.google/resolve?" + urlencode({"name": domain, "type": "MX"})
+        hosts = [a.get("data", "").lower() for a in json.load(urllib.request.urlopen(url, timeout=8)).get("Answer", [])
+                 if a.get("type") == 15]
+    except Exception:
+        return True  # unsure: play safe
+    return any(not ("rmta.net" in h or "amazonaws.com" in h) for h in hosts)
+
+
+def wanted_settings(domain):
+    """Open tracking (needs a links.<domain> CNAME) + receiving replies (MX) unless the domain has its own inbox."""
+    receive = not other_mailbox(domain)
+    return {"open_tracking": True, "tracking_subdomain": "links",
+            "capabilities": {"sending": "enabled", "receiving": "enabled" if receive else "disabled"}}, receive
+
+
+def domain_info(key, domain_id, receiving):
     d = ok(*resend_api(key, "GET", f"/domains/{domain_id}"))
     records = d.get("records") or []
     # Resend doesn't create DMARC, but inbox providers want it: suggest the safe monitoring-only policy
     records.append({"record": "DMARC (recommended)", "type": "TXT", "name": "_dmarc", "value": DMARC,
                     "status": "verified" if has_dmarc(d["name"]) else "not_started"})
-    return {"id": d["id"], "name": d["name"], "status": d.get("status", "not_started"), "records": records}
+    return {"id": d["id"], "name": d["name"], "status": d.get("status", "not_started"), "records": records,
+            "receiving": receiving}
 
 
 def handle(body):
@@ -54,12 +74,24 @@ def handle(body):
         raise Bad("Paste your Resend API key (it starts with re_).")
     if not DOMAIN.fullmatch(domain):
         raise Bad("Type just the domain, like yourdomain.com")
+    settings, receive = wanted_settings(domain)
     found = next((d for d in ok(*resend_api(key, "GET", "/domains")).get("data", []) if d.get("name") == domain), None)
     if not found:
-        found = ok(*resend_api(key, "POST", "/domains", {"name": domain}))
-    elif body.get("action") == "check" and found.get("status") != "verified":
-        ok(*resend_api(key, "POST", f"/domains/{found['id']}/verify", {}))
-    return domain_info(key, found["id"])
+        code, data = resend_api(key, "POST", "/domains", {"name": domain, **settings})
+        if code >= 400 and code not in (401, 403):  # tracking/receiving not allowed on this plan: plain domain
+            code, data = resend_api(key, "POST", "/domains", {"name": domain})
+            receive = False
+        found = ok(code, data)
+    else:
+        cur = ok(*resend_api(key, "GET", f"/domains/{found['id']}"))
+        caps = cur.get("capabilities") or {}
+        if (not cur.get("open_tracking") or not cur.get("tracking_subdomain")
+                or caps.get("receiving") != settings["capabilities"]["receiving"]):
+            code, _ = resend_api(key, "PATCH", f"/domains/{found['id']}", settings)  # best effort: never block setup
+            receive = receive and code < 400
+        if body.get("action") == "check":
+            ok(*resend_api(key, "POST", f"/domains/{found['id']}/verify", {}))
+    return domain_info(key, found["id"], receive)
 
 
 class handler(BaseHTTPRequestHandler):

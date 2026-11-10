@@ -68,7 +68,7 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
 <body>
 <header><div class="wrap">
   <div class="logo">Scrape<span>er</span></div>
-  <nav role="tablist"><button role="tab" id="tab-find" aria-selected="true">Find emails</button><button role="tab" id="tab-send" aria-selected="false">Send</button></nav>
+  <nav role="tablist"><button role="tab" id="tab-find" aria-selected="true">Find emails</button><button role="tab" id="tab-send" aria-selected="false">Send</button><button role="tab" id="tab-inbox" aria-selected="false">Inbox <span id="ib-badge"></span></button></nav>
 </div></header>
 
 <!-- ============ FIND ============ -->
@@ -151,7 +151,7 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
         <p class="hint">People see this as the sender, e.g. <b id="from-preview">Jane Smith &lt;jane@yourdomain.com&gt;</b></p></div>
       <div class="field"><label for="acc-from">From address</label><input type="email" id="acc-from" placeholder="jane@yourdomain.com">
         <p class="hint">Filled in from your name — change the part before @ to anything you like.</p></div>
-      <div class="field"><label for="acc-replyto">Replies go to</label><input type="email" id="acc-replyto" placeholder="your real inbox, e.g. jane@gmail.com"></div>
+      <div class="field"><label for="acc-replyto">Replies go to</label><input type="email" id="acc-replyto" placeholder="Resend: leave empty to read replies in the Inbox tab"></div>
       <div class="field"><label for="acc-cap">Daily limit</label><input type="number" id="acc-cap" min="1"></div>
       <label class="chk"><input type="checkbox" id="acc-remember" checked> Remember on this device</label>
       <div class="btns" style="margin-top:12px"><button class="ghost" id="acc-test">Test connection</button><button class="primary" id="acc-add">+ Add to my accounts</button></div>
@@ -206,6 +206,39 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
   </div>
 </main>
 
+<!-- ============ INBOX ============ -->
+<main class="wrap" id="inbox" hidden>
+  <div class="col">
+    <div class="card">
+      <div class="top"><h2>Replies</h2><button class="ghost" id="ib-refresh">Refresh</button></div>
+      <div class="msg" id="ib-msg" role="status"></div>
+      <div id="ib-replies"></div>
+    </div>
+    <div class="card hint" style="margin:0">
+      <b>Delivered / bounced / spam</b> are reported by Resend and reliable.<br>
+      <b>Opened</b> is approximate: Apple Mail can mark emails opened automatically, and apps that block images hide real opens.<br>
+      Email has no "typing…" or "online" status — no email tool can show that.<br>
+      Status and replies are shown for <b>Resend</b> accounts. Brevo/Mailjet/Gmail replies land in your "Replies go to" inbox.
+    </div>
+  </div>
+  <div class="col">
+    <div class="card" id="ib-reader" hidden>
+      <div class="hint" id="rd-from"></div>
+      <h2 id="rd-subj" style="margin:4px 0 10px"></h2>
+      <pre id="rd-body" style="white-space:pre-wrap;font:14px/1.55 system-ui,sans-serif;margin:0;max-height:360px;overflow:auto"></pre>
+      <label for="rd-reply" style="margin-top:16px">Your reply</label>
+      <textarea id="rd-reply" style="height:120px;font:14px/1.5 system-ui,sans-serif"></textarea>
+      <div class="btns" style="margin-top:8px"><button class="primary" id="rd-send">Send reply</button></div>
+      <div class="msg" id="rd-msg" role="status"></div>
+    </div>
+    <div class="card">
+      <div class="top"><h2>Sent emails</h2><span class="hint" id="ib-updated"></span></div>
+      <div class="stats" id="ib-stats" style="grid-template-columns:repeat(5,1fr)"></div>
+      <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>To</th><th>Status</th><th>Sent</th></tr></thead><tbody id="ib-sent"></tbody></table></div>
+    </div>
+  </div>
+</main>
+
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -221,10 +254,11 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 /* ---------- tabs ---------- */
 function showTab(name) {
-  for (const t of ["find", "send"]) { $(t).hidden = t !== name; $("tab-" + t).setAttribute("aria-selected", t === name); }
+  for (const t of ["find", "send", "inbox"]) { $(t).hidden = t !== name; $("tab-" + t).setAttribute("aria-selected", t === name); }
   try { localStorage.setItem("scrapeer-tab", name); } catch {}
+  if (name === "inbox") loadInbox();
 }
-$("tab-find").onclick = () => showTab("find"); $("tab-send").onclick = () => showTab("send");
+$("tab-find").onclick = () => showTab("find"); $("tab-send").onclick = () => showTab("send"); $("tab-inbox").onclick = () => showTab("inbox");
 
 /* ---------- FIND ---------- */
 let results = [], failed = [];
@@ -409,7 +443,9 @@ async function domainStep(action, quiet) {
     const from = $("acc-from").value.trim();
     if (!from.endsWith("@" + domain) || from === "hello@" + domain) { $("acc-from").value = nameLocal() + "@" + domain; saveAccount(); }
     updateFromPreview();
-    setMsg("dom-msg", `✓ ${domain} is verified — you're ready to send.`, "ok");
+    setMsg("dom-msg", `✓ ${domain} is verified — you're ready to send. ` + (d.receiving
+      ? "Replies will show in the Inbox tab (leave 'Replies go to' empty)."
+      : "Your domain already has its own inbox, so replies go there (or to 'Replies go to')."), "ok");
   } else {
     setMsg("dom-msg", d.status === "failed" ? "Resend couldn't find the records. Double-check each one, then check again."
       : "Waiting for DNS. After you add the records this usually takes a few minutes (sometimes a few hours). We keep checking while this page is open.");
@@ -606,6 +642,78 @@ $("send-start").onclick = async () => {
   else if (!sending) setMsg("send-msg", `Paused — ${sent} sent. Press Start to continue with the rest.`);
   sending = false; $("send-start").disabled = $("send-test").disabled = false; $("send-stop").disabled = true;
   parseRecips();
+};
+
+/* ---------- INBOX: delivery status + replies, read live from your Resend account(s) ---------- */
+const resendAccounts = () => {
+  const list = accounts.filter(a => a.provider === "resend" && a.api_key), cur = account();
+  if (cur.provider === "resend" && cur.api_key && !list.some(a => a.api_key === cur.api_key)) list.push({...cur, label: labelOf(cur)});
+  return list.filter((a, i) => list.findIndex(b => b.api_key === a.api_key) === i);  // one entry per key
+};
+const addrOf = s => (String(s || "").match(/[^\s<>"]+@[^\s<>"]+/) || [""])[0].toLowerCase();
+const fmtTime = s => { const d = new Date(String(s || "").replace(" ", "T").replace(/\+00(:00)?$/, "Z")); return isNaN(d) ? String(s || "") : d.toLocaleString(); };
+const EVENT = {delivered: ["Delivered", "sent"], opened: ["Opened", "high"], clicked: ["Clicked", "high"],
+  bounced: ["Bounced", "failed"], complained: ["Marked as spam", "failed"], failed: ["Failed", "failed"],
+  delivery_delayed: ["Delayed", "medium"], sent: ["Sending…", "medium"], queued: ["Queued", "medium"], scheduled: ["Scheduled", "medium"]};
+let replies = [], openReply = null, inboxTimer = null, inboxBusy = false;
+const readSet = () => new Set(store.get("scrapeer-read", []));
+
+async function loadInbox() {
+  const accs = resendAccounts();
+  clearInterval(inboxTimer);
+  inboxTimer = setInterval(() => { if (!$("inbox").hidden && !document.hidden) loadInbox(); }, 60000);
+  if (!accs.length) { setMsg("ib-msg", "Add a Resend account in the Send tab to see delivery status and replies here.", "err"); return; }
+  if (inboxBusy) return; inboxBusy = true;
+  setMsg("ib-msg", "Loading…"); $("ib-refresh").disabled = true;
+  const keys = accs.map(a => a.api_key);
+  const [sent, inbox] = await Promise.all([post("/api/track", {keys, action: "sent"}, 1), post("/api/track", {keys, action: "inbox"}, 1)]);
+  inboxBusy = false; $("ib-refresh").disabled = false;
+  if (sent.error || inbox.error) return setMsg("ib-msg", sent.error || inbox.error, "err");
+  setMsg("ib-msg", "");
+  const myAddrs = new Set(accs.map(a => addrOf(a.from)));
+  replies = (inbox.replies || []).filter(r => !myAddrs.has(addrOf(r.from))).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  const repliedFrom = new Set(replies.map(r => addrOf(r.from))), read = readSet();
+  const unread = replies.filter(r => !read.has(r.id)).length;
+  $("ib-badge").textContent = unread ? `(${unread})` : "";
+  $("ib-replies").innerHTML = replies.map((r, i) => `<button type="button" class="ghost" data-i="${i}" style="display:block;width:100%;text-align:left;margin-bottom:6px;font-weight:${read.has(r.id) ? 400 : 700}">
+      ${read.has(r.id) ? "" : "● "}${esc(r.from)}<div class="hint" style="margin:2px 0 0">${esc(r.subject || "(no subject)")} · ${esc(fmtTime(r.created_at))}</div></button>`).join("")
+    || `<p class="empty" style="padding:20px 0">No replies yet.</p>`;
+  const emails = sent.emails || [], n = k => emails.filter(e => k.includes(e.last_event)).length;
+  const repliedCount = emails.filter(e => repliedFrom.has(addrOf(e.to))).length;
+  $("ib-stats").innerHTML = [["Sent", emails.length], ["Delivered", n(["delivered", "opened", "clicked"])], ["Opened", n(["opened", "clicked"])],
+    ["Replied", repliedCount], ["Bounced/spam", n(["bounced", "complained", "failed"])]].map(([l, v]) => `<div><b>${v}</b>${l}</div>`).join("");
+  $("ib-sent").innerHTML = emails.slice(0, 300).map(e => {
+    const [label, cls] = EVENT[e.last_event] || [e.last_event || "unknown", "medium"];
+    return `<tr><td class="email">${esc(e.to)}<div class="hint">${esc(e.subject)}</div></td>
+      <td><span class="pill ${cls}">${label}</span>${repliedFrom.has(addrOf(e.to)) ? ` <span class="pill high">Replied</span>` : ""}</td>
+      <td>${esc(fmtTime(e.created_at))}</td></tr>`;
+  }).join("") || `<tr><td colspan="3" class="empty">Nothing sent from Resend yet.</td></tr>`;
+  $("ib-updated").textContent = "updated " + new Date().toLocaleTimeString() + " · refreshes every minute";
+}
+$("ib-refresh").onclick = loadInbox;
+$("ib-replies").onclick = async e => {
+  const b = e.target.closest("[data-i]"); if (!b) return;
+  const r = replies[Number(b.dataset.i)], accs = resendAccounts();
+  openReply = r; $("ib-reader").hidden = false; setMsg("rd-msg", "");
+  $("rd-from").textContent = `From ${r.from} · ${fmtTime(r.created_at)}`; $("rd-subj").textContent = r.subject || "(no subject)";
+  $("rd-body").textContent = "Loading…"; $("rd-reply").value = "";
+  const d = await post("/api/track", {keys: accs.map(a => a.api_key), action: "read", key: r.key, id: r.id}, 1);
+  if (openReply !== r) return;
+  $("rd-body").textContent = d.error || d.text || "(empty message)";
+  if (!d.error) { openReply.message_id = d.message_id || r.message_id; const s = readSet(); s.add(r.id); store.set("scrapeer-read", [...s].slice(-5000)); b.style.fontWeight = 400; b.firstChild.textContent = b.firstChild.textContent.replace("● ", ""); }
+  $("ib-reader").scrollIntoView({behavior: "smooth", block: "start"});
+};
+$("rd-send").onclick = async () => {
+  const r = openReply, text = $("rd-reply").value.trim();
+  if (!r || !text) return setMsg("rd-msg", "Write your reply first.", "err");
+  const acc = resendAccounts()[r.key]; if (!acc) return setMsg("rd-msg", "That Resend account was removed.", "err");
+  const to = addrOf(r.from), subject = /^re:/i.test(r.subject || "") ? r.subject : "Re: " + (r.subject || "");
+  setMsg("rd-msg", "Sending…"); $("rd-send").disabled = true;
+  const d = await post("/api/send", {account: acc, to, subject, body: text, in_reply_to: r.message_id}, 1);
+  $("rd-send").disabled = false;
+  if (d.error) return setMsg("rd-msg", d.error, "err");
+  record(to, "sent", "reply", acc.label); $("rd-reply").value = "";
+  setMsg("rd-msg", "✓ Reply sent.", "ok");
 };
 
 /* ---------- restore ---------- */
