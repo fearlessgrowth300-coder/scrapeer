@@ -43,10 +43,37 @@ def sender_of(acct):
     return sender
 
 
+KEY_HINTS = {  # provider-specific mix-ups we can spot before even connecting
+    "brevo": lambda u, p: "That's your Brevo API key (xkeysib-…). The SMTP key box needs the SMTP key, which starts with xsmtpsib- "
+                          "(Brevo → Settings → SMTP & API → SMTP tab → Generate a new SMTP key)." if p.startswith("xkeysib-") else
+                          "The SMTP login should look like 12345a001@smtp-brevo.com (Brevo → Settings → SMTP & API → SMTP tab)." if "@" not in u else "",
+}
+
+
+def login_error(acct, e):
+    """Human explanation + the server's own words, so the user can tell a wrong key from an unapproved account."""
+    code = getattr(e, "smtp_code", None)
+    raw = getattr(e, "smtp_error", b"") or b""
+    said = (raw.decode("utf-8", "ignore") if isinstance(raw, bytes) else str(raw)).strip().replace("\n", " ")[:220]
+    provider = acct.get("provider")
+    if provider == "brevo":
+        tip = ("Brevo refused the login. Check: (1) the SMTP key starts with xsmtpsib- (not the xkeysib- API key), "
+               "(2) the SMTP login is the one shown on Brevo's SMTP tab, (3) your Brevo account is approved for sending "
+               "(new accounts must be activated — look for a banner in Brevo or contact their support).")
+    elif provider == "mailjet":
+        tip = "Mailjet refused the login. Use your Mailjet API key as the login and the Secret key as the password."
+    else:
+        tip = "Login refused. Check the login and password/key (Gmail needs an App Password with 2-step verification on)."
+    return tip + (f" Server said: {code} {said}" if said else "")
+
+
 def connect(acct):
     user = str(acct.get("user", "")).strip()
     if not user or not acct.get("pass"):
         raise Bad("Enter the SMTP login and password / key.")
+    hint = KEY_HINTS.get(acct.get("provider"), lambda u, p: "")(user, str(acct.get("pass")).strip())
+    if hint:
+        raise Bad(hint)
     sender = sender_of(acct)
     domain = (user if "@" in user else sender).split("@")[1].lower()
     host = str(acct.get("host") or PROVIDER_HOSTS.get(acct.get("provider")) or HOSTS.get(domain) or "smtp." + domain).strip()
@@ -64,9 +91,9 @@ def connect(acct):
         raise Bad(f"Couldn't connect to {host}:{port} ({type(e).__name__}).")
     try:
         server.login(user, str(acct["pass"]).replace(" ", "") if domain in ("gmail.com", "googlemail.com") else str(acct["pass"]))
-    except (smtplib.SMTPAuthenticationError, smtplib.SMTPServerDisconnected):
+    except (smtplib.SMTPAuthenticationError, smtplib.SMTPServerDisconnected) as e:
         # Gmail hangs up after the first wrong password, so smtplib's retry shows up as "disconnected"
-        raise Bad("Login refused. Check the login and password/key (Gmail needs an App Password with 2-step verification on).")
+        raise Bad(login_error(acct, e))
     except (OSError, smtplib.SMTPException) as e:
         raise Bad(f"Mail server error during login ({type(e).__name__}).")
     return server, sender
