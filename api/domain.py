@@ -39,13 +39,73 @@ def has_dmarc(domain):
         return False
 
 
+def _name(msg, i):
+    """Read a (possibly compressed) DNS name starting at msg[i]; returns (name, next index)."""
+    parts, jumped, end = [], False, None
+    for _ in range(64):
+        n = msg[i]
+        if n == 0:
+            i += 1
+            break
+        if n & 0xC0 == 0xC0:
+            if not jumped:
+                end = i + 2
+            i, jumped = ((n & 0x3F) << 8) | msg[i + 1], True
+            continue
+        parts.append(msg[i + 1:i + 1 + n].decode("ascii", "ignore"))
+        i += 1 + n
+    return ".".join(parts).lower(), (end if jumped else i)
+
+
+def mx_hosts_at(ns, domain):
+    """Ask the domain's own name server directly over TCP: the live answer, no cache."""
+    import random
+    import socket
+    import struct
+    q = struct.pack(">HHHHHH", random.randint(0, 65535), 0, 1, 0, 0, 0) + b"".join(
+        bytes([len(x)]) + x.encode() for x in domain.split(".")) + b"\0" + struct.pack(">HH", 15, 1)
+    with socket.create_connection((ns, 53), timeout=6) as c:
+        c.sendall(struct.pack(">H", len(q)) + q)
+        buf = b""
+        while len(buf) < 2 or len(buf) < 2 + struct.unpack(">H", buf[:2])[0]:
+            chunk = c.recv(65535)
+            if not chunk:
+                break
+            buf += chunk
+    msg = buf[2:]
+    qd, an = struct.unpack(">HH", msg[4:8])
+    i = 12
+    for _ in range(qd):
+        i = _name(msg, i)[1] + 4
+    hosts = []
+    for _ in range(an):
+        i = _name(msg, i)[1]
+        rtype, _, _, rdlen = struct.unpack(">HHIH", msg[i:i + 10])
+        i += 10
+        if rtype == 15:
+            hosts.append(_name(msg, i + 2)[0])
+        i += rdlen
+    return hosts
+
+
 def other_mailbox(domain):
     """True if the domain already receives mail somewhere else (Gmail/Outlook/Zoho...): then we must not
-    point its MX at Resend, or their existing inbox would stop getting mail."""
+    point its MX at Resend, or their existing inbox would stop getting mail. Checked at the domain's own
+    name servers, because public resolvers keep a deleted MX record cached for hours."""
     try:
-        url = "https://dns.google/resolve?" + urlencode({"name": domain, "type": "MX"})
-        hosts = [a.get("data", "").lower() for a in json.load(urllib.request.urlopen(url, timeout=8)).get("Answer", [])
-                 if a.get("type") == 15]
+        url = "https://dns.google/resolve?" + urlencode({"name": domain, "type": "NS"})
+        ns = [a["data"].rstrip(".") for a in json.load(urllib.request.urlopen(url, timeout=8)).get("Answer", []) if a.get("type") == 2]
+        hosts = None
+        for server in ns[:2]:
+            try:
+                hosts = mx_hosts_at(server, domain)
+                break
+            except Exception:
+                continue
+        if hosts is None:  # couldn't reach the name servers: fall back to Google's (maybe cached) answer
+            url = "https://dns.google/resolve?" + urlencode({"name": domain, "type": "MX"})
+            hosts = [a.get("data", "").lower() for a in json.load(urllib.request.urlopen(url, timeout=8)).get("Answer", [])
+                     if a.get("type") == 15]
     except Exception:
         return True  # unsure: play safe
     return any(not ("rmta.net" in h or "amazonaws.com" in h) for h in hosts)
