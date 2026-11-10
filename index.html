@@ -705,7 +705,7 @@ $("send-test").onclick = async () => {
   $("send-test").disabled = true;
   const out = [];
   for (const a of sendingPool()) {  // one test per account, so you see which ones land in spam
-    const me = myAddress(a), sample = recipients[pvIdx] || enrich({email: me});
+    const me = $("who-email").textContent.trim() || myAddress(a), sample = recipients[pvIdx] || enrich({email: me});
     setMsg("send-msg", `Sending test via ${a.label} to ${me}…`);
     const m = compose(sample), d = await post("/api/send", {account_id: a.id, to: me, subject: `[TEST via ${PROV[a.provider]?.name}] ` + m.subject, body: m.body, reply_to: replyAddr()}, 0);
     out.push(d.error ? `✗ ${a.label}: ${d.error}` : `✓ ${a.label}`);
