@@ -34,12 +34,24 @@ def one_line(s, limit):
     return " ".join(str(s or "").split())[:limit]
 
 
+PROVIDER_HOSTS = {"brevo": "smtp-relay.brevo.com", "mailjet": "in-v3.mailjet.com"}
+
+
+def sender_of(acct):
+    """The From address: explicit 'from' (Brevo/Mailjet logins aren't your address), else the login itself."""
+    sender = str(acct.get("from") or acct.get("user") or "").strip().lower()
+    if not EMAIL.fullmatch(sender):
+        raise Bad("Enter the From address (an address on your domain).")
+    return sender
+
+
 def connect(acct):
-    user = str(acct.get("user", "")).strip().lower()
-    if not EMAIL.fullmatch(user) or not acct.get("pass"):
-        raise Bad("Enter your email address and app password.")
-    domain = user.split("@")[1]
-    host = str(acct.get("host") or HOSTS.get(domain) or "smtp." + domain).strip()
+    user = str(acct.get("user", "")).strip()
+    if not user or not acct.get("pass"):
+        raise Bad("Enter the SMTP login and password / key.")
+    sender = sender_of(acct)
+    domain = (user if "@" in user else sender).split("@")[1].lower()
+    host = str(acct.get("host") or PROVIDER_HOSTS.get(acct.get("provider")) or HOSTS.get(domain) or "smtp." + domain).strip()
     port = int(acct.get("port") or 587)
     if port not in PORTS:
         raise Bad("Port must be 587, 465 or 2525.")
@@ -56,10 +68,10 @@ def connect(acct):
         server.login(user, str(acct["pass"]).replace(" ", "") if domain in ("gmail.com", "googlemail.com") else str(acct["pass"]))
     except (smtplib.SMTPAuthenticationError, smtplib.SMTPServerDisconnected):
         # Gmail hangs up after the first wrong password, so smtplib's retry shows up as "disconnected"
-        raise Bad("Login refused. Use an App Password (not your normal password), and check 2-step verification is on.")
+        raise Bad("Login refused. Check the login and password/key (Gmail needs an App Password with 2-step verification on).")
     except (OSError, smtplib.SMTPException) as e:
         raise Bad(f"Mail server error during login ({type(e).__name__}).")
-    return server, user
+    return server, sender
 
 
 def resend_api(key, method, path, payload=None):
@@ -135,7 +147,10 @@ def send(body):
         msg["To"] = to
         msg["Subject"] = subject
         msg["Message-ID"] = make_msgid(domain=user.split("@")[1])
-        msg["List-Unsubscribe"] = f"<mailto:{user}?subject=unsubscribe>"
+        reply_to = str(acct.get("reply_to", "")).strip().lower()
+        if EMAIL.fullmatch(reply_to):
+            msg["Reply-To"] = reply_to
+        msg["List-Unsubscribe"] = f"<mailto:{reply_to if EMAIL.fullmatch(reply_to) else user}?subject=unsubscribe>"
         msg.set_content(text)
         try:
             server.send_message(msg)

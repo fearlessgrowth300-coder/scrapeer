@@ -115,11 +115,14 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
 <main class="wrap" id="send" hidden>
   <div class="col">
     <div class="card">
-      <h2>1. Send with</h2>
-      <div class="field"><label for="acc-provider">Sending method</label>
+      <h2>1. Sending accounts</h2>
+      <p class="hint" style="margin:-6px 0 12px">Add several free accounts — the app rotates between them, each up to its own daily limit. Brevo + Mailjet + Resend on your domain ≈ 600 emails/day per person, free.</p>
+      <div class="field"><label for="acc-provider">Service</label>
         <select id="acc-provider" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:var(--bg);color:var(--ink);font:14px system-ui,sans-serif">
-          <option value="resend">Resend — your own domain</option>
-          <option value="smtp">Email account — Gmail, Outlook, Google Workspace…</option>
+          <option value="brevo">Brevo — free 300/day</option>
+          <option value="mailjet">Mailjet — free 200/day</option>
+          <option value="resend">Resend — free 100/day</option>
+          <option value="smtp">Email account — Gmail, Outlook, Workspace…</option>
         </select></div>
       <div id="resend-fields">
         <div class="field"><label for="acc-key">A. Resend API key</label><input type="password" id="acc-key" placeholder="re_…" autocomplete="off">
@@ -133,23 +136,27 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
           <div class="btns" style="margin-top:8px"><button class="ghost" type="button" id="dom-check">I've added them — check now</button></div>
         </div>
         <div class="msg" id="dom-msg" role="status"></div>
-        <div class="field"><label for="acc-from">From address</label><input type="email" id="acc-from" placeholder="jane@yourdomain.com"></div>
-        <div class="field"><label for="acc-replyto">Replies go to</label><input type="email" id="acc-replyto" placeholder="your real inbox, e.g. jane@gmail.com">
-          <p class="hint">Resend only sends — replies need a real inbox to land in.</p></div>
       </div>
       <div id="smtp-fields">
-        <div class="field"><label for="acc-user">Email address</label><input type="email" id="acc-user" placeholder="you@gmail.com" autocomplete="username"></div>
-        <div class="field"><label for="acc-pass">App password</label><input type="password" id="acc-pass" placeholder="16-letter app password" autocomplete="current-password">
-          <p class="hint">Not your normal password. Gmail / Workspace: turn on 2-step verification, then <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">create an app password</a>.</p></div>
-        <details><summary>Advanced (custom domain email)</summary>
+        <p class="hint" id="smtp-help" style="margin:0 0 10px"></p>
+        <div class="field"><label for="acc-user" id="lbl-user">Email address</label><input type="text" id="acc-user" placeholder="you@gmail.com" autocomplete="username"></div>
+        <div class="field"><label for="acc-pass" id="lbl-pass">App password</label><input type="password" id="acc-pass" autocomplete="current-password"></div>
+        <details id="smtp-adv"><summary>Advanced (custom SMTP server)</summary>
           <div class="row2"><div class="field"><label for="acc-host">SMTP server</label><input type="text" id="acc-host" placeholder="auto"></div>
           <div class="field"><label for="acc-port">Port</label><input type="number" id="acc-port" placeholder="587"></div></div>
         </details>
       </div>
-      <div class="field"><label for="acc-name">Your name (shown as sender)</label><input type="text" id="acc-name" placeholder="Jane Smith"></div>
-      <label class="chk"><input type="checkbox" id="acc-remember"> Remember on this device</label>
-      <div class="btns" style="margin-top:12px"><button class="ghost" id="acc-test">Test connection</button></div>
+      <div class="field"><label for="acc-from">From address</label><input type="email" id="acc-from" placeholder="jane@yourdomain.com"></div>
+      <div class="field"><label for="acc-replyto">Replies go to</label><input type="email" id="acc-replyto" placeholder="your real inbox, e.g. jane@gmail.com"></div>
+      <div class="row2">
+        <div class="field"><label for="acc-name">Your name</label><input type="text" id="acc-name" placeholder="Jane Smith"></div>
+        <div class="field"><label for="acc-cap">Daily limit</label><input type="number" id="acc-cap" min="1"></div>
+      </div>
+      <label class="chk"><input type="checkbox" id="acc-remember" checked> Remember on this device</label>
+      <div class="btns" style="margin-top:12px"><button class="ghost" id="acc-test">Test connection</button><button class="primary" id="acc-add">+ Add to my accounts</button></div>
       <div class="msg" id="acc-msg" role="status"></div>
+      <div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>Account</th><th>Today</th><th></th></tr></thead><tbody id="acct-list"></tbody></table></div>
+      <p class="hint" id="acct-total"></p>
     </div>
     <div class="card">
       <h2>2. Recipients</h2>
@@ -178,10 +185,10 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
     <div class="card">
       <h2>4. Send</h2>
       <div class="row2">
-        <div class="field"><label for="delay">Wait between emails (seconds)</label><input type="text" id="delay" value="45-90"></div>
-        <div class="field"><label for="cap">Max emails per day</label><input type="number" id="cap" value="50" min="1"></div>
+        <div class="field"><label for="delay">Wait between emails (seconds)</label><input type="text" id="delay" value="15-30"></div>
+        <div class="field"><label for="cap">Overall max per day</label><input type="number" id="cap" placeholder="no extra limit" min="1"></div>
       </div>
-      <p class="hint" style="margin-top:-4px">Slow + small batches keep your inbox out of spam. Gmail allows ~500/day; new accounts should start at 20–50. Keep this tab open while sending.</p>
+      <p class="hint" style="margin-top:-4px">The app rotates through your accounts and stops each one at its daily limit. New domains: start ~50/day and raise it weekly. Keep this tab open while sending.</p>
       <div class="btns" style="margin-top:12px">
         <button class="ghost" id="send-test">Send test to myself</button>
         <button class="primary" id="send-start">Start sending</button>
@@ -360,7 +367,7 @@ $("pv-next").onclick = () => { pvIdx = Math.min(recipients.length - 1, pvIdx + 1
 for (const id of ["subject", "body", "footer", "delay", "cap"]) $(id).addEventListener("input", () => { saveDraft(); renderPreview(); });
 
 /* ---------- SEND: account ---------- */
-const ACC = ["provider", "key", "domain", "from", "replyto", "user", "pass", "name", "host", "port"];
+const ACC = ["provider", "key", "domain", "from", "replyto", "user", "pass", "name", "host", "port", "cap"];
 
 /* Resend domain setup: add the domain to the member's own Resend account, show DNS records, check until verified */
 const cleanDomain = s => s.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split(/[\/?#]/)[0];
@@ -402,14 +409,64 @@ async function domainStep(action, quiet) {
 }
 $("dom-connect").onclick = () => domainStep("connect");
 $("dom-check").onclick = () => domainStep("check");
+const PROV = {
+  brevo: {name: "Brevo", cap: 300, user: "SMTP login", userPh: "xxxxxx@smtp-brevo.com", pass: "SMTP key",
+    help: `Free <a href="https://www.brevo.com" target="_blank" rel="noopener">Brevo</a> account → Settings → <b>SMTP & API</b> → copy the SMTP login and generate an SMTP key. Then <b>Senders, Domains</b> → add & authenticate your domain.`},
+  mailjet: {name: "Mailjet", cap: 200, user: "API key", userPh: "Mailjet API key", pass: "Secret key",
+    help: `Free <a href="https://www.mailjet.com" target="_blank" rel="noopener">Mailjet</a> account → Account settings → <b>API keys</b> (API key + Secret key). Then <b>Senders & domains</b> → add & authenticate your domain.`},
+  resend: {name: "Resend", cap: 100},
+  smtp: {name: "Email", cap: 400, user: "Email address", userPh: "you@gmail.com", pass: "App password",
+    help: `Gmail / Workspace: turn on 2-step verification, then <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">create an app password</a> (not your normal password).`},
+};
 function account() {
-  return {provider: $("acc-provider").value, api_key: $("acc-key").value.trim(), from: $("acc-from").value.trim(),
+  const provider = $("acc-provider").value;
+  return {provider, api_key: $("acc-key").value.trim(), from: $("acc-from").value.trim(),
           reply_to: $("acc-replyto").value.trim(), user: $("acc-user").value.trim(), pass: $("acc-pass").value,
-          from_name: $("acc-name").value.trim(), host: $("acc-host").value.trim(), port: Number($("acc-port").value) || 587};
+          from_name: $("acc-name").value.trim(), host: $("acc-host").value.trim(), port: Number($("acc-port").value) || 587,
+          cap: Number($("acc-cap").value) || PROV[provider].cap};
 }
-const myAddress = a => a.provider === "resend" ? (a.reply_to || a.from) : a.user;
-const showProvider = () => { const r = $("acc-provider").value === "resend"; $("resend-fields").hidden = !r; $("smtp-fields").hidden = r; };
-$("acc-provider").addEventListener("change", () => { showProvider(); saveAccount(); setMsg("acc-msg", ""); });
+const labelOf = a => `${PROV[a.provider]?.name || a.provider} · ${a.from || a.user}`;
+const formFilled = a => a.provider === "resend" ? !!(a.api_key && a.from) : !!(a.user && a.pass && (a.from || a.user.includes("@")));
+const myAddress = a => a.reply_to || a.from || a.user;
+function showProvider() {
+  const p = $("acc-provider").value, meta = PROV[p], r = p === "resend";
+  $("resend-fields").hidden = !r; $("smtp-fields").hidden = r;
+  if (!r) { $("lbl-user").textContent = meta.user; $("acc-user").placeholder = meta.userPh; $("lbl-pass").textContent = meta.pass;
+            $("smtp-help").innerHTML = meta.help; $("smtp-adv").hidden = p !== "smtp"; }
+  $("acc-cap").placeholder = meta.cap;
+  $("acc-from").placeholder = p === "smtp" ? "same as email address (optional)" : "jane@yourdomain.com";
+}
+$("acc-provider").addEventListener("change", () => { $("acc-cap").value = ""; showProvider(); saveAccount(); setMsg("acc-msg", ""); });
+
+/* saved sending accounts (this browser only) — rotated during sending */
+let accounts = store.get("scrapeer-accounts", []);
+const sentTodayVia = label => log.filter(l => l.date === today() && l.status === "sent" && l.via === label).length;
+function renderAccounts() {
+  $("acct-list").innerHTML = accounts.map((a, i) => `<tr><td class="email">${esc(a.label)}</td>
+    <td>${sentTodayVia(a.label)} / ${a.cap}</td><td><button class="ghost" type="button" data-rm="${i}" aria-label="Remove">✕</button></td></tr>`).join("")
+    || `<tr><td colspan="3" class="empty" style="padding:14px">No accounts added yet.</td></tr>`;
+  const total = accounts.reduce((s, a) => s + a.cap, 0);
+  $("acct-total").textContent = accounts.length ? `${accounts.length} account(s) · up to ${total} emails/day` : "";
+}
+$("acct-list").onclick = e => {
+  const i = e.target.dataset?.rm; if (i == null) return;
+  if (!confirm("Remove " + accounts[i].label + "?")) return;
+  accounts.splice(Number(i), 1); store.set("scrapeer-accounts", accounts); renderAccounts();
+};
+$("acc-add").onclick = async () => {
+  const a = account();
+  if (!formFilled(a)) return setMsg("acc-msg", "Fill in the account details first.", "err");
+  setMsg("acc-msg", "Testing the account…"); $("acc-add").disabled = true;
+  const d = await post("/api/send", {account: a, action: "verify"}, 0);
+  $("acc-add").disabled = false;
+  if (d.error) return setMsg("acc-msg", "Not added: " + d.error, "err");
+  const label = labelOf(a);
+  accounts = accounts.filter(x => x.label !== label).concat({...a, label});
+  store.set("scrapeer-accounts", accounts); renderAccounts();
+  setMsg("acc-msg", `✓ Added ${label}. Add another service to send more per day.`, "ok");
+};
+// accounts used for sending: saved ones, or the filled-in form if nothing is saved yet
+const sendingPool = () => accounts.length ? accounts : (formFilled(account()) ? [{...account(), label: labelOf(account())}] : []);
 function saveAccount() {
   const v = Object.fromEntries(ACC.map(k => [k, $("acc-" + k).value]));
   try {
@@ -430,39 +487,45 @@ $("acc-test").onclick = async () => {
 /* ---------- SEND: sending ---------- */
 const sentMap = () => store.get("scrapeer-sent", {});
 let log = store.get("scrapeer-log", []);
-function record(email, status, note) {
-  log.unshift({when: new Date().toLocaleString(), date: today(), email, status, note: note || ""});
-  log = log.slice(0, 5000); store.set("scrapeer-log", log);
+function record(email, status, note, via) {
+  log.unshift({when: new Date().toLocaleString(), date: today(), email, status, note: note || "", via: via || ""});
+  log = log.slice(0, 20000); store.set("scrapeer-log", log);
   if (status === "sent") { const s = sentMap(); s[email] = today(); store.set("scrapeer-sent", s); }
-  renderLog();
+  renderLog(); renderAccounts();
 }
 function renderLog() {
   const t = today();
   $("st-today").textContent = log.filter(l => l.date === t && l.status === "sent").length;
   $("log").innerHTML = log.slice(0, 200).map(l => `<tr><td>${esc(l.when)}</td><td class="email">${esc(l.email)}</td>
-    <td><span class="pill ${l.status}">${l.status}</span> ${esc(l.note)}</td></tr>`).join("") ||
+    <td><span class="pill ${l.status}">${l.status}</span> ${esc(l.note)}${l.via ? `<div class="hint">via ${esc(l.via)}</div>` : ""}</td></tr>`).join("") ||
     `<tr><td colspan="3" class="empty">Nothing sent yet.</td></tr>`;
 }
-$("log-csv").onclick = () => download("scrapeer_sent_" + today() + ".csv", log, ["when", "email", "status", "note"]);
+$("log-csv").onclick = () => download("scrapeer_sent_" + today() + ".csv", log, ["when", "email", "status", "via", "note"]);
 $("log-clear").onclick = () => {
   if (!confirm("Clear the log AND forget who was already emailed? They could be emailed again.")) return;
   log = []; store.set("scrapeer-log", []); store.set("scrapeer-sent", {}); renderLog(); parseRecips();
 };
 
 function checkReady(r) {
-  const a = account(), m = compose(r);
-  if (a.provider === "resend" ? !a.api_key || !a.from : !a.user || !a.pass) return "Fill in step 1 (how to send) first.";
+  const m = compose(r);
+  if (!sendingPool().length) return "Add a sending account in step 1 first.";
   if (!m.subject || !$("body").value.trim()) return "Write a subject and message first.";
   if (/\{\{/.test(m.subject + m.body)) return "A {{field}} isn't filled in — check the preview.";
   return "";
 }
 $("send-test").onclick = async () => {
-  const a = account(), me = myAddress(a), sample = recipients[pvIdx] || enrich({email: me || "you@example.com"}), problem = checkReady(sample);
+  const problem = checkReady(recipients[pvIdx] || enrich({email: "you@example.com"}));
   if (problem) return setMsg("send-msg", problem, "err");
-  setMsg("send-msg", "Sending test to " + me + "…"); $("send-test").disabled = true;
-  const m = compose(sample), d = await post("/api/send", {account: a, to: me, subject: "[TEST] " + m.subject, body: m.body}, 0);
+  $("send-test").disabled = true;
+  const out = [];
+  for (const a of sendingPool()) {  // one test per account, so you see which ones land in spam
+    const me = myAddress(a), sample = recipients[pvIdx] || enrich({email: me});
+    setMsg("send-msg", `Sending test via ${a.label} to ${me}…`);
+    const m = compose(sample), d = await post("/api/send", {account: a, to: me, subject: `[TEST via ${PROV[a.provider]?.name}] ` + m.subject, body: m.body}, 0);
+    out.push(d.error ? `✗ ${a.label}: ${d.error}` : `✓ ${a.label}`);
+  }
   $("send-test").disabled = false;
-  setMsg("send-msg", d.error || "Test sent — check your inbox (and spam folder).", d.error ? "err" : "ok");
+  setMsg("send-msg", out.join("  ·  ") + " — check your inbox and spam folder.", out.some(x => x[0] === "✗") ? "err" : "ok");
 };
 
 let sending = false, wake = null;
@@ -473,20 +536,38 @@ $("send-start").onclick = async () => {
   const blocked = dneSet(), queue = recipients.filter(r => !blocked.has(r.email) && !sentMap()[r.email]);
   if (!queue.length) return setMsg("send-msg", "No one left to email (everyone is already emailed or on the do-not-email list).", "err");
   const problem = checkReady(queue[0]); if (problem) return setMsg("send-msg", problem, "err");
-  const [lo, hi] = ($("delay").value.match(/\d+/g) || [45, 90]).map(Number), cap = Number($("cap").value) || 50;
-  if (!confirm(`Send to ${queue.length} people from ${account().user}?`)) return;
+  const [lo, hi] = ($("delay").value.match(/\d+/g) || [15, 30]).map(Number), cap = Number($("cap").value) || Infinity;
+  const pool = sendingPool(), dead = new Set();
+  if (!confirm(`Send to ${queue.length} people, rotating through ${pool.length} account(s)?`)) return;
   sending = true; $("send-start").disabled = $("send-test").disabled = true; $("send-stop").disabled = false;
-  let sent = 0, fails = 0, done = 0, consecutiveFails = 0;
+  let sent = 0, fails = 0, done = 0, consecutiveFails = 0, turn = 0, stopReason = "";
+  // next account (round-robin) that still has room today and hasn't failed to log in
+  const pick = () => {
+    for (let i = 0; i < pool.length; i++) {
+      const a = pool[(turn + i) % pool.length];
+      if (!dead.has(a.label) && sentTodayVia(a.label) < a.cap) { turn = (turn + i + 1) % pool.length; return a; }
+    }
+    return null;
+  };
   for (const r of queue) {
     if (!sending) break;
     const sentToday = log.filter(l => l.date === today() && l.status === "sent").length;
-    if (sentToday >= cap) { setMsg("send-msg", `Daily limit of ${cap} reached — continue tomorrow (already-emailed people are skipped).`, "err"); break; }
-    setMsg("send-msg", `Sending to ${r.email}…`);
-    const m = compose(r), d = await post("/api/send", {account: account(), to: r.email, subject: m.subject, body: m.body}, 1);
+    if (sentToday >= cap) { stopReason = `Overall limit of ${cap} reached — continue tomorrow (already-emailed people are skipped).`; break; }
+    let d, a;
+    while ((a = pick())) {  // an account that can't log in is dropped and the same person goes to the next account
+      setMsg("send-msg", `Sending to ${r.email} via ${a.label}…`);
+      const m = compose(r);
+      d = await post("/api/send", {account: a, to: r.email, subject: m.subject, body: m.body}, 1);
+      if (d.error && /Login refused|connect to|API key|domain|verified|not allowed|suspend|limit|quota/i.test(d.error)) {
+        dead.add(a.label); record(r.email, "failed", "account dropped: " + d.error, a.label); continue;
+      }
+      break;
+    }
+    if (!a) { stopReason = dead.size ? "All accounts are full for today or failed — see the log." : "All accounts hit today's limit — continue tomorrow."; break; }
     if (d.error) {
-      fails++; consecutiveFails++; record(r.email, "failed", d.error);
-      if (/Login refused|connect to|app password|API key|domain/i.test(d.error) || consecutiveFails >= 3) { setMsg("send-msg", "Stopped: " + d.error, "err"); break; }
-    } else { sent++; consecutiveFails = 0; record(r.email, "sent"); }
+      fails++; consecutiveFails++; record(r.email, "failed", d.error, a.label);
+      if (consecutiveFails >= 5) { stopReason = "Stopped after 5 failures in a row: " + d.error; break; }
+    } else { sent++; consecutiveFails = 0; record(r.email, "sent", "", a.label); }
     done++;
     $("st-sent").textContent = sent; $("st-failed").textContent = fails; $("send-fill").style.width = (100 * done / queue.length) + "%";
     if (done < queue.length && sending) {
@@ -495,7 +576,8 @@ $("send-start").onclick = async () => {
       await sleep(wait * 1000);
     }
   }
-  if (sending && done === queue.length) setMsg("send-msg", `Done — ${sent} sent, ${fails} failed.`, fails ? "err" : "ok");
+  if (stopReason) setMsg("send-msg", `${stopReason} (${sent} sent this run)`, "err");
+  else if (sending && done === queue.length) setMsg("send-msg", `Done — ${sent} sent, ${fails} failed.`, fails ? "err" : "ok");
   else if (!sending) setMsg("send-msg", `Paused — ${sent} sent. Press Start to continue with the rest.`);
   sending = false; $("send-start").disabled = $("send-test").disabled = false; $("send-stop").disabled = true;
   parseRecips();
@@ -506,6 +588,7 @@ function saveDraft() { store.set("scrapeer-draft", {recips: $("recips").value, s
   footer: $("footer").value, delay: $("delay").value, cap: $("cap").value}); }
 (() => {
   const d = store.get("scrapeer-draft", {});
+  if (d.cap === "50") d.cap = "";  // old default would silently cap rotation at 50
   for (const k of ["recips", "subject", "body", "footer", "delay", "cap"]) if (d[k] != null) $(k).value = d[k];
   $("dne").value = store.get("scrapeer-dne", "");
   let acc = null;
@@ -514,7 +597,7 @@ function saveDraft() { store.set("scrapeer-draft", {recips: $("recips").value, s
   if (acc) for (const k of ACC) if (acc[k] != null && acc[k] !== "") $("acc-" + k).value = acc[k];
   showProvider();
   if ($("acc-provider").value === "resend" && $("acc-key").value && $("acc-domain").value) domainStep("connect", true);
-  parseRecips(); renderLog();
+  parseRecips(); renderLog(); renderAccounts();
   let tab = "find"; try { tab = localStorage.getItem("scrapeer-tab") || "find"; } catch {}
   showTab(tab);
 })();

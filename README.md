@@ -10,6 +10,6 @@ Paste websites, get the **real** contact emails: crawled from contact/about/team
 
 Deploys on Vercel with zero config: import the repo, framework preset "Other".
 
-The Send tab: account (Gmail/Outlook/Yahoo/Zoho/custom SMTP), recipients (from Find results or CSV), `{{field|fallback}}` personalization, opt-out line, random delay + daily cap, do-not-email list, never emails the same person twice, sent log. All kept in the browser (localStorage).
+The Send tab: several sending accounts per person (Brevo 300/day, Mailjet 200/day, Resend 100/day free tiers, or Gmail/Workspace/custom SMTP), rotated round-robin with a daily limit each; accounts that fail to log in are dropped for the run, recipients (from Find results or CSV), `{{field|fallback}}` personalization, opt-out line, random delay + daily cap, do-not-email list, never emails the same person twice, sent log. All kept in the browser (localStorage).
 
 Known limits: sites that only show emails after JavaScript runs aren't covered yet; mailbox existence isn't SMTP-verified (needs port 25 or a paid verifier); sending runs in the open browser tab; no open/reply tracking yet.
