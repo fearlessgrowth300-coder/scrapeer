@@ -4,7 +4,7 @@
       "maxDuration": 60
     },
     "api/send.py": {
-      "maxDuration": 30
+      "maxDuration": 60
     },
     "api/domain.py": {
       "maxDuration": 30
@@ -19,6 +19,9 @@
       "maxDuration": 30
     },
     "api/hook.py": {
+      "maxDuration": 15
+    },
+    "api/files.py": {
       "maxDuration": 15
     }
   }

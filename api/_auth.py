@@ -39,6 +39,23 @@ def _http(method, url, headers, body=None, timeout=20):
         raise Bad("Couldn't reach the database. Try again.", 503)
 
 
+def storage(method, path, body=None, raw=False):
+    """Supabase Storage call with the service key. raw=True returns bytes (downloads)."""
+    headers = {"apikey": SERVICE_KEY}
+    if not SERVICE_KEY.startswith("sb_"):
+        headers["Authorization"] = "Bearer " + SERVICE_KEY
+    if not raw:
+        return _http(method, f"{SUPABASE_URL}/storage/v1{path}", {**headers, "Content-Type": "application/json"}, body)
+    req = urllib.request.Request(f"{SUPABASE_URL}/storage/v1{path}", method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, b""
+    except OSError:
+        raise Bad("Couldn't reach file storage. Try again.", 503)
+
+
 def require_user(headers):
     """The signed-in user ({id, email}) from the 'Authorization: Bearer <supabase access token>' header."""
     if not SUPABASE_URL or not SERVICE_KEY:

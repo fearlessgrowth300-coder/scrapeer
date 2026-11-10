@@ -6,6 +6,7 @@
 
 The account is sent with each request and never stored on the server.
 """
+import base64
 import html as htmllib
 import json
 import os
@@ -19,7 +20,7 @@ from email.utils import formataddr, make_msgid
 from http.server import BaseHTTPRequestHandler
 
 sys.path.insert(0, os.path.dirname(__file__))
-from _auth import Bad, load_account, serve  # noqa: E402,F401  (Bad re-exported for track/domain)
+from _auth import SUPABASE_URL, Bad, load_account, serve, storage  # noqa: E402,F401  (Bad re-exported for track/domain)
 from _scout import EMAIL, is_public  # noqa: E402
 
 HOSTS = {"gmail.com": "smtp.gmail.com", "googlemail.com": "smtp.gmail.com", "outlook.com": "smtp-mail.outlook.com",
@@ -142,9 +143,11 @@ def send_resend(body):
     if not subject or not text.strip():
         raise Bad("Subject and message can't be empty.")
     unsub = reply_to or sender
-    html = html_twin(text)
+    text, html = with_extras(body, text)
     payload = {"from": formataddr((one_line(acct.get("from_name"), 80), sender)), "to": [to], "subject": subject,
                "text": text, "html": html, "headers": {"List-Unsubscribe": f"<mailto:{unsub}?subject=unsubscribe>"}}
+    if body.get("_attach"):
+        payload["attachments"] = [{"filename": n, "content": base64.b64encode(b).decode()} for n, _, b in body["_attach"]]
     in_reply_to = one_line(body.get("in_reply_to"), 300)
     if in_reply_to.startswith("<") and in_reply_to.endswith(">"):  # answering a reply: keep it in the same thread
         payload["headers"].update({"In-Reply-To": in_reply_to, "References": in_reply_to})
@@ -161,6 +164,56 @@ def html_twin(text):
     """Plain-looking HTML copy of the text: every service needs HTML to add its open-tracking pixel."""
     return ("<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.5\">"
             + htmllib.escape(text).replace("\n", "<br>") + "</div>")
+
+
+ATTACH_LIMIT = 7 * 1024 * 1024  # bigger than this goes as a download link (big attachments get blocked / spam-foldered)
+
+
+def human_size(n):
+    return f"{n / 1048576:.1f} MB" if n >= 1048576 else f"{max(1, n // 1024)} KB"
+
+
+def gather_files(files, user_id):
+    """Uploaded files → small ones attached, the rest as 30-day private download links. Only the user's own files."""
+    attach, links, total = [], [], 0
+    for f in (files or [])[:10]:
+        path, name = str(f.get("path", "")), str(f.get("name") or "file")[:120]
+        if not path.startswith(user_id + "/") or ".." in path:
+            raise Bad("Unknown attachment.")
+        size, ctype = int(f.get("size") or 0), str(f.get("type") or "application/octet-stream")[:100]
+        if size and total + size <= ATTACH_LIMIT:
+            code, data = storage("GET", f"/object/scrapeer-files/{path}", raw=True)
+            if code == 200 and data:
+                attach.append((name, ctype, data)); total += len(data)
+                continue
+        code, data = storage("POST", f"/object/sign/scrapeer-files/{path}", {"expiresIn": 30 * 86400})
+        if code >= 400 or not (data or {}).get("signedURL"):
+            raise Bad(f"Couldn't prepare {name}. Try again.")
+        links.append((name, size, f"{SUPABASE_URL}/storage/v1{data['signedURL']}"))
+    return attach, links
+
+
+def with_extras(body, text):
+    """Message + download links + signature (text and logo — GIFs animate inside the email)."""
+    links = body.get("_links") or []
+    if links:
+        text += "\n\n" + "\n".join(f"📎 {n} ({human_size(s)}): {u}" for n, s, u in links)
+    sig = body.get("signature") or {}
+    sig_text = str(sig.get("text") or "").strip()[:500]
+    logo = str(sig.get("logo") or "")
+    logo_ok = logo.startswith(f"{SUPABASE_URL}/storage/v1/object/public/scrapeer-public/") and '"' not in logo
+    html = html_twin(text)
+    if sig_text:
+        text += "\n\n" + sig_text
+    if sig_text or logo_ok:
+        html += ("<div style=\"margin-top:18px;font-family:Arial,sans-serif;font-size:13px;line-height:1.45;color:#444\">"
+                 + htmllib.escape(sig_text).replace("\n", "<br>")
+                 + (f'<br><img src="{logo}" alt="logo" style="max-width:160px;max-height:80px;margin-top:8px;border:0">' if logo_ok else "")
+                 + "</div>")
+    if links:  # make the links clickable in the HTML version
+        for n, s, u in links:
+            html = html.replace(htmllib.escape(u), f'<a href="{htmllib.escape(u)}">{htmllib.escape(u)}</a>')
+    return text, html
 
 
 def send(body):
@@ -192,8 +245,12 @@ def send(body):
         msg["List-Unsubscribe"] = f"<mailto:{reply_to if EMAIL.fullmatch(reply_to) else user}?subject=unsubscribe>"
         if acct.get("provider") == "mailjet":
             msg["X-Mailjet-TrackOpen"] = "1"  # Brevo tracks opens on HTML mail by default
+        text, html = with_extras(body, text)
         msg.set_content(text)
-        msg.add_alternative(html_twin(text), subtype="html")
+        msg.add_alternative(html, subtype="html")
+        for name, ctype, data in body.get("_attach") or []:
+            main, _, sub = (ctype if "/" in ctype else "application/octet-stream").partition("/")
+            msg.add_attachment(data, maintype=main, subtype=sub, filename=name)
         try:
             server.send_message(msg)
         except smtplib.SMTPRecipientsRefused:
@@ -211,6 +268,13 @@ def send(body):
 def handle(body, user):
     if body.get("account_id"):  # a saved account: its secrets never leave the server
         body = {**body, "account": load_account(user["id"], body["account_id"])}
+    body = {k: v for k, v in body.items() if not k.startswith("_")}  # internal fields can't come from the browser
+    if body.get("files"):
+        attach, links = gather_files(body["files"], user["id"])
+        body = {**body, "_attach": attach, "_links": links}
+    if body.get("signature") and not str((body["signature"] or {}).get("logo") or "").startswith(
+            f"{SUPABASE_URL}/storage/v1/object/public/scrapeer-public/{user['id']}/"):
+        body = {**body, "signature": {"text": (body["signature"] or {}).get("text", "")}}  # only your own logo
     return send(body)
 
 
