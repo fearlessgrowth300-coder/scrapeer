@@ -97,6 +97,7 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
     <div class="top">
       <h2>Results</h2>
       <div class="btns">
+        <label class="chk"><input type="checkbox" id="bestonly"> Best per site</label>
         <label class="chk"><input type="checkbox" id="showlow"> Show low confidence</label>
         <button class="ghost" id="copy" disabled>Copy</button>
         <button class="ghost" id="csv" disabled>Download CSV</button>
@@ -229,18 +230,23 @@ $("tab-find").onclick = () => showTab("find"); $("tab-send").onclick = () => sho
 let results = [], failed = [];
 const siteList = () => [...new Set($("sites").value.split("\n").map(s => s.trim()).filter(Boolean))].slice(0, 500);
 $("sites").oninput = () => { $("count").textContent = siteList().length + " websites"; };
-const visible = () => results.filter(r => $("showlow").checked || r.confidence !== "low");
+const visible = () => {  // results are sorted best-first, so the first one per site is its best email
+  const seenSite = new Set();
+  return results.filter(r => ($("showlow").checked || r.confidence !== "low") &&
+    (!$("bestonly").checked || (!seenSite.has(r.site) && seenSite.add(r.site))));
+};
+const typeLabel = r => r.type === "role" ? "shared inbox" : "person" + (r.first_name ? " · " + esc(r.first_name) : "");
 function renderFind() {
   const rows = visible();
   $("found").textContent = rows.length;
   $("copy").disabled = $("csv").disabled = $("tosend").disabled = !rows.length;
   $("rows").innerHTML = rows.length ? rows.map(r => `<tr><td class="email">${esc(r.email)}</td>
-    <td><span class="pill ${r.confidence}">${r.confidence}</span></td><td>${r.type}</td><td>${esc(r.site)}</td>
+    <td><span class="pill ${r.confidence}">${r.confidence}</span></td><td>${typeLabel(r)}</td><td>${esc(r.site)}</td>
     <td><a href="${esc(r.found_on)}" target="_blank" rel="noopener noreferrer">${esc(r.found_on.replace(/^https?:\/\//, ""))}</a></td></tr>`).join("")
     : `<tr><td colspan="5" class="empty">${results.length ? "Only low-confidence emails so far." : "No emails yet."}</td></tr>`;
   $("fails").textContent = failed.length ? "Didn't load: " + failed.join(", ") : "";
 }
-$("showlow").onchange = renderFind;
+$("showlow").onchange = $("bestonly").onchange = renderFind;
 
 async function post(url, body, tries = 2) {
   for (let i = 0; ; i++) {
@@ -279,9 +285,9 @@ $("copy").onclick = async () => {
   await navigator.clipboard.writeText(visible().map(r => r.email).join("\n"));
   $("copy").textContent = "Copied!"; setTimeout(() => $("copy").textContent = "Copy", 1500);
 };
-$("csv").onclick = () => download("scrapeer_emails_" + today() + ".csv", visible(), ["email", "confidence", "type", "site", "source", "found_on"]);
+$("csv").onclick = () => download("scrapeer_emails_" + today() + ".csv", visible(), ["email", "confidence", "type", "first_name", "site", "source", "found_on"]);
 $("tosend").onclick = () => {
-  $("recips").value = ["email,site,type", ...visible().map(r => [r.email, r.site, r.type].map(csvQ).join(","))].join("\n");
+  $("recips").value = ["email,first_name,site,type", ...visible().map(r => [r.email, r.first_name || "", r.site, r.type].map(csvQ).join(","))].join("\n");
   saveDraft(); parseRecips(); showTab("send");
 };
 
@@ -303,8 +309,9 @@ function parseCSV(text) {
 const EMAIL_RE = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[a-z]{2,}$/i;
 const cap1 = s => s ? s[0].toUpperCase() + s.slice(1).toLowerCase() : "";
 function enrich(r) {
-  const [local, domain = ""] = r.email.split("@"), first = local.split(/[._-]/)[0];
-  if (!r.first_name && /^[a-z]{2,}$/i.test(first) && !ROLE.has(local.toLowerCase().replace(/[._-]?\d+$/, "")) && !ROLE.has(first.toLowerCase()))
+  const [local, domain = ""] = r.email.split("@"), parts = local.split(/[._-]/), first = parts[0];
+  // only guess from "first.last" style addresses; "jdoe@" would give "Jdoe" (the scraper confirms names from the site)
+  if (!r.first_name && parts.length > 1 && /^[a-z]{2,}$/i.test(first) && !ROLE.has(first.toLowerCase()) && r.type !== "role")
     r.first_name = cap1(first);
   r.site = r.site || domain;
   if (!r.company) r.company = cap1(r.site.replace(/^www\./, "").split(".")[0]);

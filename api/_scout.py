@@ -31,14 +31,25 @@ TIMEOUT = 8
 
 FREE_MAIL = {"gmail.com", "googlemail.com", "yahoo.com", "outlook.com", "hotmail.com", "live.com", "icloud.com",
              "me.com", "aol.com", "proton.me", "protonmail.com", "gmx.com", "zoho.com", "yandex.com", "mail.com"}
+# shared inboxes: real, but read by "whoever" (or nobody); owner@/ceo@ are often vanity addresses
 ROLE = {"info", "sales", "admin", "contact", "contactus", "hello", "hi", "office", "support", "help", "team",
-        "enquiries", "inquiries", "booking", "bookings", "orders", "service", "mail", "billing", "careers", "jobs",
-        "press", "media", "marketing", "general", "reception", "privacy", "legal", "accounts"}
+        "enquiries", "inquiries", "enquiry", "inquiry", "booking", "bookings", "orders", "order", "service", "mail",
+        "careers", "jobs", "press", "media", "marketing", "general", "reception", "privacy", "legal", "accounts",
+        "owner", "ceo", "founder", "boss", "manager", "shop", "store", "customerservice", "customercare", "care",
+        "wholesale", "partnerships", "partners", "collab", "collabs", "pr", "studio", "events", "returns", "hr"}
+# words that make e.g. "koveasupport@gmail.com" a shared inbox too
+ROLE_PARTS = ("support", "info", "sales", "contact", "hello", "enquir", "inquir", "booking", "order", "service",
+              "admin", "office", "customer", "help", "team", "shop", "store")
+# machine mailboxes nobody reads
+AUTOMATED = {"billing", "invoice", "invoices", "notification", "notifications", "notify", "mailer-daemon", "postmaster",
+             "bounce", "bounces", "alert", "alerts", "newsletter", "unsubscribe", "abuse", "webmaster", "hostmaster",
+             "dmarc", "system", "automated", "auto", "receipt", "receipts", "updates", "daemon", "root", "nobody"}
 # addresses a site's code/theme carries that belong to someone else
 VENDOR_DOMAINS = ("wixpress.com", "sentry.io", "squarespace.com", "shopify.com", "godaddy.com", "wordpress.com",
                   "wordpress.org", "w3.org", "schema.org", "jquery.com", "cloudflare.com", "example.com",
                   "example.org", "domain.com", "yourdomain.com", "email.com", "test.com", "mysite.com",
-                  "website.com", "company.com", "placeholder.com")
+                  "website.com", "company.com", "placeholder.com", "paypal.com", "stripe.com", "mailchimp.com",
+                  "klaviyo.com", "bigcommerce.com", "weebly.com", "webflow.io", "hubspot.com")
 PLACEHOLDER_LOCALS = {"name", "email", "you", "your", "yourname", "youremail", "user", "username", "john.doe",
                       "johndoe", "jane.doe", "janedoe", "firstname", "first.last", "firstname.lastname", "someone",
                       "test", "noreply", "no-reply", "donotreply", "do-not-reply", "example"}
@@ -81,11 +92,34 @@ def decode_cf(hexstr):
     return bytes(int(hexstr[i:i + 2], 16) ^ key for i in range(2, len(hexstr) - 1, 2)).decode("utf-8", "ignore")
 
 
+def base_local(local):
+    return re.sub(r"[._-]?\d+$", "", local)  # info2@ / sales-1@ are still role inboxes
+
+
 def is_junk(email):
     local, _, domain = email.partition("@")
     return (domain.rsplit(".", 1)[-1] in NOT_TLD or "@2x" in email or "@3x" in email
-            or local in PLACEHOLDER_LOCALS or re.fullmatch(r"[0-9a-f]{16,}", local) is not None
+            or local in PLACEHOLDER_LOCALS or base_local(local) in AUTOMATED
+            or re.fullmatch(r"[0-9a-f]{16,}", local) is not None
             or any(domain == v or domain.endswith("." + v) for v in VENDOR_DOMAINS))
+
+
+def kind_of(local):
+    base = base_local(local)
+    if base in ROLE or any(p in base for p in ROLE_PARTS) or not re.fullmatch(r"[a-z]+(?:[._-][a-z]+){0,2}", base):
+        return "role"
+    return "person"
+
+
+def person_name(local, site_text):
+    """First name of a named-person address: 'john.doe' -> John; 'jdoe'/'john' only if 'John' appears on the site."""
+    parts = re.split(r"[._-]", base_local(local))
+    first = parts[0]
+    if len(first) < 2 or not first.isalpha():
+        return ""
+    if len(parts) > 1 or re.search(r"\b" + re.escape(first.capitalize()) + r"\b", site_text):
+        return first.capitalize()
+    return ""
 
 
 def emails_in(page):
@@ -146,15 +180,19 @@ def has_mx(domain):
 SOURCE_SCORE = {"mailto": 3, "schema": 3, "hidden": 3, "text": 1}
 
 
-def score(email, src, pages, site_root, on_contact_page):
+def score(email, src, pages, site_root, on_contact_page, kind="role", named=False):
     domain = email.split("@")[1]
     s = SOURCE_SCORE[src] + min(pages, 3) + (1 if on_contact_page else 0)
-    if root(domain) == site_root:
+    own, free = root(domain) == site_root, domain in FREE_MAIL
+    if own:
         s += 4
-    elif domain in FREE_MAIL:
+    elif free:
         s += 1          # small businesses often use gmail
     else:
         s -= 3          # another company's domain: often the web designer or a partner
+    if kind == "person" and (own or free):
+        # firstname@theirdomain beats any info@/hello@ (max role bonus is 3+3+1); +1 if the name is on the site
+        s += (6 if own else 2) + (1 if named else 0)
     return s
 
 
@@ -190,16 +228,19 @@ def scout(site):
             h[1] += 1
             h[2] = h[2] or bool(CONTACT_WORDS.search(url))
 
+    site_text = " ".join(htmllib.unescape(re.sub(r"<[^>]+>", " ", h)) for h, _ in pages)[:2_000_000]
     results = []
     for e, (src, n, contact_pg, url) in hits.items():
         if not has_mx(e.split("@")[1]):
             continue
-        s = score(e, src, n, site_root, contact_pg)
+        local = e.split("@")[0]
+        kind = kind_of(local)
+        name = person_name(local, site_text) if kind == "person" else ""
+        s = score(e, src, n, site_root, contact_pg, kind, bool(name))
         results.append({
             "email": e, "site": site_root, "score": s,
             "confidence": "high" if s >= 7 else "medium" if s >= 4 else "low",
-            "type": "role" if re.sub(r"[._-]?\d+$", "", e.split("@")[0]) in ROLE else "personal",
-            "source": src, "found_on": url,
+            "type": kind, "first_name": name, "source": src, "found_on": url,
         })
     return {"site": site_root, "pages": len(pages), "emails": sorted(results, key=lambda r: -r["score"])}
 
@@ -212,6 +253,13 @@ def _selfcheck():
     assert got == {"jane.smith@acme.co.uk": "mailto", "sales@acme.co.uk": "hidden", "mike@acme.co.uk": "hidden"}, got
     assert root("www.shop.acme.co.uk") == "acme.co.uk" and root("blog.acme.com") == "acme.com"
     assert score("a@acme.com", "mailto", 2, "acme.com", True) > score("a@webdesignco.com", "mailto", 2, "acme.com", True)
+    # named person > role inbox; automated + third-party are junk
+    assert kind_of("john") == kind_of("john.doe") == kind_of("jdoe") == "person"
+    assert kind_of("info") == kind_of("sales2") == kind_of("owner") == kind_of("koveasupport") == kind_of("x9z_1q") == "role"
+    assert is_junk("billing@acme.com") and is_junk("no-reply@acme.com") and is_junk("shop@paypal.com") and not is_junk("info@acme.com")
+    assert score("john@acme.com", "text", 1, "acme.com", False, "person") > score("info@acme.com", "mailto", 3, "acme.com", True, "role")
+    assert score("andrea@designco.com", "mailto", 1, "acme.com", False, "person") < 4  # other company: stays low
+    assert person_name("john.doe", "") == "John" and person_name("jdoe", "Meet Jane") == "" and person_name("mike", "Hi, I'm Mike!") == "Mike"
     assert contact_links('<a href="/contact-us">x</a><a href="/shop">Get in touch</a><a href="https://x.com/about">y</a>',
                          "https://acme.com/") == ["https://acme.com/contact-us", "https://acme.com/shop"]
     assert not is_public("http://127.0.0.1/") and not is_public("http://169.254.169.254/") and not is_public("file:///etc/passwd")
