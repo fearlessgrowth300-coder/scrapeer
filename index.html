@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scrapeer — real email finder</title>
+<meta name="description" content="Paste websites, get the real contact emails — verified, scored, no junk.">
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#14171c;--muted:#5e6673;--line:#e3e6eb;--accent:#4f46e5;--accent-ink:#fff;
+--high:#0f7b4b;--high-bg:#e3f5ec;--med:#8a5a00;--med-bg:#fdf1d8;--low:#6b7280;--low-bg:#eef0f3;--err:#b42318}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1116;--card:#161a21;--ink:#e8ebf0;--muted:#98a2b3;--line:#262c36;
+--accent:#818cf8;--accent-ink:#0e1116;--high:#4ade80;--high-bg:#12301f;--med:#fbbf24;--med-bg:#33280d;--low:#9ca3af;--low-bg:#22272f;--err:#f87171}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{border-bottom:1px solid var(--line);background:var(--card)}
+.wrap{max-width:1100px;margin:0 auto;padding:0 16px}
+header .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
+.logo{font-weight:700;font-size:18px;letter-spacing:-.01em}.logo span{color:var(--accent)}
+.tag{color:var(--muted);font-size:13px}
+main{display:grid;grid-template-columns:340px 1fr;gap:20px;padding-top:24px;padding-bottom:40px}
+@media (max-width:820px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}
+label{font-weight:600;font-size:14px;display:block;margin-bottom:8px}
+textarea{width:100%;height:260px;resize:vertical;border:1px solid var(--line);border-radius:10px;padding:10px;
+background:var(--bg);color:var(--ink);font:13px/1.5 ui-monospace,Consolas,monospace}
+textarea:focus,button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.hint{color:var(--muted);font-size:12px;margin:6px 0 14px}
+button{border:0;border-radius:10px;padding:10px 14px;font:600 14px system-ui,sans-serif;cursor:pointer}
+.primary{background:var(--accent);color:var(--accent-ink);width:100%}
+.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
+button:disabled{opacity:.5;cursor:not-allowed}
+.bar{height:8px;background:var(--line);border-radius:99px;overflow:hidden;margin:14px 0 8px}
+.bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:12px;color:var(--muted)}
+.stats b{display:block;font-size:20px;color:var(--ink)}
+.how{margin-top:16px;font-size:13px;color:var(--muted)}.how li{margin:4px 0}
+.top{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:12px}
+.top h2{margin:0;font-size:16px}.tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.chk{font-size:13px;color:var(--muted);display:flex;gap:6px;align-items:center}
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:var(--muted);font-weight:600;padding:8px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
+td.email{font-weight:600;word-break:break-all}
+td a{color:var(--muted);word-break:break-all}
+.pill{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:600}
+.high{color:var(--high);background:var(--high-bg)}.medium{color:var(--med);background:var(--med-bg)}.low{color:var(--low);background:var(--low-bg)}
+.empty{color:var(--muted);text-align:center;padding:50px 10px}
+.err{color:var(--err);font-size:13px;margin-top:8px}
+.fails{margin-top:12px;font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header><div class="wrap"><div class="logo">Scrape<span>er</span></div><div class="tag">Real email finder</div></div></header>
+<main class="wrap">
+  <section>
+    <div class="card">
+      <label for="sites">Websites (one per line, max 500)</label>
+      <textarea id="sites" placeholder="linudo.com&#10;ghost.org&#10;https://example-shop.com"></textarea>
+      <div class="hint" id="count">0 websites</div>
+      <button class="primary" id="go">Find emails</button>
+      <div class="err" id="err" role="alert"></div>
+      <div class="bar" aria-hidden="true"><i id="fill"></i></div>
+      <div class="stats" aria-live="polite">
+        <div><b id="done">0</b>sites done</div><div><b id="found">0</b>emails</div><div><b id="failed">0</b>failed</div>
+      </div>
+    </div>
+    <ul class="how card">
+      <li>Visits the contact, about, team and policy pages, not just the homepage.</li>
+      <li>Decodes hidden emails (Cloudflare, mailto links, "name [at] site [dot] com").</li>
+      <li>Removes junk (image names, trackers, example.com, the web designer's email).</li>
+      <li>Keeps only domains that can actually receive email.</li>
+      <li><b>High</b> = on the company's own domain and clearly published.</li>
+    </ul>
+  </section>
+  <section class="card">
+    <div class="top">
+      <h2>Results</h2>
+      <div class="tools">
+        <label class="chk"><input type="checkbox" id="showlow"> Show low confidence</label>
+        <button class="ghost" id="copy" disabled>Copy emails</button>
+        <button class="ghost" id="csv" disabled>Download CSV</button>
+      </div>
+    </div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Email</th><th>Confidence</th><th>Type</th><th>Website</th><th>Found on</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="5" class="empty">Paste websites and press Find emails.</td></tr></tbody>
+    </table></div>
+    <div class="fails" id="fails"></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let results = [], failed = [];
+const siteList = () => [...new Set($("sites").value.split("\n").map(s => s.trim()).filter(Boolean))].slice(0, 500);
+$("sites").oninput = () => { $("count").textContent = siteList().length + " websites"; };
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const visible = () => results.filter(r => $("showlow").checked || r.confidence !== "low");
+function render() {
+  const rows = visible();
+  $("found").textContent = rows.length;
+  $("copy").disabled = $("csv").disabled = !rows.length;
+  $("rows").innerHTML = rows.length ? rows.map(r => `<tr><td class="email">${esc(r.email)}</td>
+    <td><span class="pill ${r.confidence}">${r.confidence}</span></td><td>${r.type}</td><td>${esc(r.site)}</td>
+    <td><a href="${esc(r.found_on)}" target="_blank" rel="noopener noreferrer">${esc(r.found_on.replace(/^https?:\/\//, ""))}</a></td></tr>`).join("")
+    : `<tr><td colspan="5" class="empty">${results.length ? "Only low-confidence emails so far." : "No emails yet."}</td></tr>`;
+  $("fails").textContent = failed.length ? "Didn't load: " + failed.join(", ") : "";
+}
+$("showlow").onchange = render;
+
+async function scrape(site, tries = 2) {
+  for (let i = 0; ; i++) {
+    try {
+      const r = await fetch("/api/scrape", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({site})});
+      if (r.ok) return await r.json();
+      if (r.status === 400) throw new Error("bad");
+    } catch (e) { if (e.message === "bad") throw e; }
+    if (i >= tries) throw new Error("failed");
+    await new Promise(res => setTimeout(res, 1500 * (i + 1)));
+  }
+}
+
+$("go").onclick = async () => {
+  const sites = siteList();
+  if (!sites.length) { $("err").textContent = "Paste at least one website."; return; }
+  $("err").textContent = ""; results = []; failed = []; render();
+  $("go").disabled = $("sites").disabled = true; $("go").textContent = "Searching…";
+  let done = 0; const seen = new Set(), queue = [...sites];
+  const tick = () => { $("done").textContent = done + "/" + sites.length; $("failed").textContent = failed.length;
+                       $("fill").style.width = (100 * done / sites.length) + "%"; };
+  tick();
+  const worker = async () => {
+    while (queue.length) {
+      const site = queue.shift();
+      try {
+        const data = await scrape(site);
+        if (data.error) failed.push(site);
+        for (const e of data.emails || []) if (!seen.has(e.email)) { seen.add(e.email); results.push(e); }
+        results.sort((a, b) => b.score - a.score);
+      } catch { failed.push(site); }
+      done++; tick(); render();
+    }
+  };
+  await Promise.all(Array.from({length: Math.min(6, sites.length)}, worker));
+  $("go").disabled = $("sites").disabled = false; $("go").textContent = "Find emails";
+};
+
+$("copy").onclick = async () => {
+  await navigator.clipboard.writeText(visible().map(r => r.email).join("\n"));
+  $("copy").textContent = "Copied!"; setTimeout(() => $("copy").textContent = "Copy emails", 1500);
+};
+$("csv").onclick = () => {
+  const cols = ["email", "confidence", "type", "site", "source", "found_on"];
+  const q = v => '"' + String(v).replace(/"/g, '""') + '"';
+  const csv = [cols.join(","), ...visible().map(r => cols.map(c => q(r[c])).join(","))].join("\n");
+  const a = Object.assign(document.createElement("a"), {href: URL.createObjectURL(new Blob([csv], {type: "text/csv"})),
+    download: "scrapeer_emails_" + new Date().toISOString().slice(0, 10) + ".csv"});
+  a.click(); URL.revokeObjectURL(a.href);
+};
+</script>
+</body>
+</html>

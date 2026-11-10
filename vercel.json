@@ -1,0 +1,3 @@
+{
+  "functions": { "api/scrape.py": { "maxDuration": 60 } }
+}
