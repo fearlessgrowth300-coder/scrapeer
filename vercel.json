@@ -1,3 +1,22 @@
 {
-  "functions": { "api/scrape.py": { "maxDuration": 60 }, "api/send.py": { "maxDuration": 30 }, "api/domain.py": { "maxDuration": 30 }, "api/track.py": { "maxDuration": 60 } }
+  "functions": {
+    "api/scrape.py": {
+      "maxDuration": 60
+    },
+    "api/send.py": {
+      "maxDuration": 30
+    },
+    "api/domain.py": {
+      "maxDuration": 30
+    },
+    "api/track.py": {
+      "maxDuration": 60
+    },
+    "api/me.py": {
+      "maxDuration": 30
+    },
+    "api/config.py": {
+      "maxDuration": 30
+    }
+  }
 }

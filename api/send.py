@@ -1,6 +1,6 @@
 """POST /api/send — send ONE email via Resend (own domain, account.provider="resend") or the user's own mailbox (SMTP + app password).
 
-{"account": {"user": "me@gmail.com", "pass": "app password", "from_name": "Me", "host": "", "port": 587},
+{"account_id": "<saved account>"}  or  {"account": {...unsaved form...}}   (signed-in users only)
  "action": "verify"}                                   -> just log in, to test the account
  "to": "x@site.com", "subject": "...", "body": "..."   -> send it
 
@@ -19,16 +19,13 @@ from email.utils import formataddr, make_msgid
 from http.server import BaseHTTPRequestHandler
 
 sys.path.insert(0, os.path.dirname(__file__))
+from _auth import Bad, load_account, serve  # noqa: E402,F401  (Bad re-exported for track/domain)
 from _scout import EMAIL, is_public  # noqa: E402
 
 HOSTS = {"gmail.com": "smtp.gmail.com", "googlemail.com": "smtp.gmail.com", "outlook.com": "smtp-mail.outlook.com",
          "hotmail.com": "smtp-mail.outlook.com", "live.com": "smtp-mail.outlook.com", "yahoo.com": "smtp.mail.yahoo.com",
          "icloud.com": "smtp.mail.me.com", "me.com": "smtp.mail.me.com", "zoho.com": "smtp.zoho.com", "aol.com": "smtp.aol.com"}
 PORTS = (465, 587, 2525)
-
-
-class Bad(Exception):
-    """A problem the user can fix; message is shown in the app."""
 
 
 def one_line(s, limit):
@@ -173,20 +170,12 @@ def send(body):
             pass
 
 
+def handle(body, user):
+    if body.get("account_id"):  # a saved account: its secrets never leave the server
+        body = {**body, "account": load_account(user["id"], body["account_id"])}
+    return send(body)
+
+
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
-        try:
-            data = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 65536)) or b"{}")
-            self._send(200, send(data))
-        except Bad as e:
-            self._send(400, {"error": str(e)})
-        except Exception as e:
-            self._send(500, {"error": f"Server error ({type(e).__name__})"})
-
-    def _send(self, code, data):
-        out = json.dumps(data).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(out)))
-        self.end_headers()
-        self.wfile.write(out)
+        serve(self, handle)

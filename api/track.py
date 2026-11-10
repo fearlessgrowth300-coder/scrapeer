@@ -1,9 +1,9 @@
-"""POST /api/track — status of sent emails and the replies received, read live from each member's
-own Resend account(s). Nothing is stored on this server.
+"""POST /api/track — status of sent emails and the replies received, read live from the signed-in
+user's saved Resend account(s). Nothing is stored on this server.
 
-{"keys": ["re_..."], "action": "sent"}                         -> {"emails": [{id, to, subject, last_event, created_at}]}
-{"keys": ["re_..."], "action": "inbox"}                        -> {"replies": [{id, key, from, subject, created_at, message_id}]}
-{"keys": ["re_..."], "action": "read", "key": 0, "id": "..."}  -> {from, to, subject, text, created_at, message_id}
+{"action": "sent"}                         -> {"emails": [{id, to, subject, last_event, created_at}]}
+{"action": "inbox"}                        -> {"replies": [{id, key, from, subject, created_at, message_id}]}
+{"action": "read", "key": 0, "id": "..."}  -> {from, to, subject, text, created_at, message_id}
 """
 import html as htmllib
 import json
@@ -13,7 +13,8 @@ import sys
 from http.server import BaseHTTPRequestHandler
 
 sys.path.insert(0, os.path.dirname(__file__))
-from send import Bad, resend_api  # noqa: E402
+from _auth import Bad, serve, user_accounts  # noqa: E402
+from send import resend_api  # noqa: E402
 
 UUID = re.compile(r"[0-9a-f-]{36}")
 
@@ -48,8 +49,10 @@ def to_text(html):
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def handle(body):
-    keys = list(dict.fromkeys(str(k).strip() for k in body.get("keys") or [] if str(k).strip().startswith("re_")))[:10]
+def handle(body, user):
+    accts = [a for a in user_accounts(user["id"], "resend") if str(a.get("api_key", "")).startswith("re_")]
+    accts = [a for i, a in enumerate(accts) if a["api_key"] not in {b["api_key"] for b in accts[:i]}][:10]  # one per key
+    keys = [a["api_key"] for a in accts]
     if not keys:
         raise Bad("Add a Resend account in the Send tab to see delivery status and replies.")
     action = body.get("action")
@@ -58,7 +61,7 @@ def handle(body):
                             "last_event": e.get("last_event"), "created_at": e.get("created_at")}
                            for k in keys for e in all_pages(k, "/emails", 10)]}
     if action == "inbox":
-        return {"replies": [{"id": e.get("id"), "key": i, "from": e.get("from"), "to": e.get("to"),
+        return {"replies": [{"id": e.get("id"), "key": i, "account_id": accts[i]["id"], "from": e.get("from"), "to": e.get("to"),
                              "subject": e.get("subject"), "created_at": e.get("created_at"),
                              "message_id": e.get("message_id")}
                             for i, k in enumerate(keys) for e in all_pages(k, "/emails/receiving", 3)]}
@@ -74,18 +77,4 @@ def handle(body):
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
-        try:
-            data = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 8192)) or b"{}")
-            self._send(200, handle(data))
-        except Bad as e:
-            self._send(400, {"error": str(e)})
-        except Exception as e:
-            self._send(500, {"error": f"Server error ({type(e).__name__})"})
-
-    def _send(self, code, data):
-        out = json.dumps(data).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(out)))
-        self.end_headers()
-        self.wfile.write(out)
+        serve(self, handle, limit=8192)

@@ -63,13 +63,33 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
 .preview pre{white-space:pre-wrap;font:14px/1.55 system-ui,sans-serif;margin:0}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .chips button{padding:3px 8px;font:12px ui-monospace,Consolas,monospace;background:var(--bg);border:1px solid var(--line);color:var(--ink)}
+#auth:not([hidden]){display:block;max-width:440px;padding-top:48px}
+#who{display:flex;gap:8px;align-items:center}#who[hidden]{display:none}
+@media (max-width:640px){header .wrap{flex-wrap:wrap;height:auto;padding-top:10px;padding-bottom:10px}#who-email{display:none}}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 </head>
 <body>
 <header><div class="wrap">
   <div class="logo">Scrape<span>er</span></div>
-  <nav role="tablist"><button role="tab" id="tab-find" aria-selected="true">Find emails</button><button role="tab" id="tab-send" aria-selected="false">Send</button><button role="tab" id="tab-inbox" aria-selected="false">Inbox <span id="ib-badge"></span></button></nav>
+  <nav role="tablist" id="nav" hidden><button role="tab" id="tab-find" aria-selected="true">Find emails</button><button role="tab" id="tab-send" aria-selected="false">Send</button><button role="tab" id="tab-inbox" aria-selected="false">Inbox <span id="ib-badge"></span></button></nav>
+  <div id="who" hidden><span class="hint" id="who-email" style="margin:0"></span><button class="ghost" id="signout">Sign out</button></div>
 </div></header>
+
+<!-- ============ SIGN IN ============ -->
+<main class="wrap" id="auth" hidden>
+  <div class="card">
+    <h2 id="auth-title">Sign in</h2>
+    <p class="hint" style="margin:-4px 0 14px">Your sending accounts, API keys and conversations are stored encrypted in your private account.</p>
+    <form id="auth-form" novalidate>
+      <div class="field" id="auth-email-wrap"><label for="auth-email">Email</label><input type="email" id="auth-email" autocomplete="email" required></div>
+      <div class="field" id="auth-pass-wrap"><label for="auth-pass" id="auth-pass-label">Password</label><input type="password" id="auth-pass" autocomplete="current-password" minlength="8" required></div>
+      <button class="primary wide" id="auth-go" type="submit">Sign in</button>
+    </form>
+    <div class="msg" id="auth-msg" role="alert"></div>
+    <p class="hint" style="margin-top:14px"><a href="#" id="auth-switch">No account? Create one</a> · <a href="#" id="auth-forgot">Forgot password?</a></p>
+  </div>
+</main>
 
 <!-- ============ FIND ============ -->
 <main class="wrap" id="find">
@@ -153,7 +173,6 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
         <p class="hint">Filled in from your name — change the part before @ to anything you like.</p></div>
       <div class="field"><label for="acc-replyto">Replies go to</label><input type="email" id="acc-replyto" placeholder="Resend: leave empty to read replies in the Inbox tab"></div>
       <div class="field"><label for="acc-cap">Daily limit</label><input type="number" id="acc-cap" min="1"></div>
-      <label class="chk"><input type="checkbox" id="acc-remember" checked> Remember on this device</label>
       <div class="btns" style="margin-top:12px"><button class="ghost" id="acc-test">Test connection</button><button class="primary" id="acc-add">+ Add to my accounts</button></div>
       <div class="msg" id="acc-msg" role="status"></div>
       <div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>Account</th><th>Today</th><th></th></tr></thead><tbody id="acct-list"></tbody></table></div>
@@ -242,8 +261,22 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const store = {get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
-               set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }};
+// Private data (sent log, already-emailed, do-not-email, drafts, read replies) lives in your account on the server;
+// only harmless UI preferences stay in this browser.
+const SYNCED = {"scrapeer-log": "log", "scrapeer-sent": "sent", "scrapeer-dne": "dne", "scrapeer-draft": "draft", "scrapeer-read": "read"};
+let state = {}, saveTimer = null, sb = null, signedIn = false;
+const local = {get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+               set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+               del(k) { try { localStorage.removeItem(k); } catch {} }};
+const store = {get: (k, d) => SYNCED[k] ? (state[SYNCED[k]] ?? d) : local.get(k, d),
+               set(k, v) { if (!SYNCED[k]) return local.set(k, v); state[SYNCED[k]] = v; clearTimeout(saveTimer); saveTimer = setTimeout(saveState, 2000); }};
+async function saveState() {
+  clearTimeout(saveTimer); if (!signedIn) return;
+  // ponytail: whole-state upsert, last write wins across devices; per-row tables if two people share one login
+  const d = await post("/api/me", {action: "save_state", state: {...state, log: (state.log || []).slice(0, 3000)}}, 2);
+  if (d.error) console.warn("save failed:", d.error);
+}
+document.addEventListener("visibilitychange", () => { if (document.hidden && saveTimer) saveState(); });
 const csvQ = v => '"' + String(v ?? "").replace(/"/g, '""') + '"';
 function download(name, rows, cols) {
   const csv = [cols.join(","), ...rows.map(r => cols.map(c => csvQ(r[c])).join(","))].join("\n");
@@ -255,7 +288,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 /* ---------- tabs ---------- */
 function showTab(name) {
   for (const t of ["find", "send", "inbox"]) { $(t).hidden = t !== name; $("tab-" + t).setAttribute("aria-selected", t === name); }
-  try { localStorage.setItem("scrapeer-tab", name); } catch {}
+  local.set("scrapeer-tab", name);
   if (name === "inbox") loadInbox();
 }
 $("tab-find").onclick = () => showTab("find"); $("tab-send").onclick = () => showTab("send"); $("tab-inbox").onclick = () => showTab("inbox");
@@ -285,9 +318,12 @@ $("showlow").onchange = $("bestonly").onchange = renderFind;
 async function post(url, body, tries = 2) {
   for (let i = 0; ; i++) {
     try {
-      const r = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      const token = sb ? (await sb.auth.getSession()).data.session?.access_token : "";
+      const r = await fetch(url, {method: "POST", body: JSON.stringify(body),
+        headers: {"Content-Type": "application/json", ...(token ? {Authorization: "Bearer " + token} : {})}});
       const data = await r.json().catch(() => ({error: "Server error " + r.status}));
-      if (r.ok || r.status === 400) return data;
+      if (r.status === 401) { showAuth(data.error); return data; }
+      if (r.ok || r.status === 400 || r.status === 503) return data;
     } catch {}
     if (i >= tries) return {error: "Network error — check your connection"};
     await new Promise(res => setTimeout(res, 1500 * (i + 1)));
@@ -430,11 +466,13 @@ $("dns-rows").onclick = async e => {
 };
 async function domainStep(action, quiet) {
   const key = $("acc-key").value.trim(), domain = cleanDomain($("acc-domain").value);
-  if (!key || !domain) { if (!quiet) setMsg("dom-msg", "Paste your API key and type your domain first.", "err"); return; }
+  // a saved Resend account for this domain can be used without re-typing its key (the key stays on the server)
+  const saved = accounts.find(a => a.provider === "resend" && a.domain === domain);
+  if ((!key && !saved) || !domain) { if (!quiet) setMsg("dom-msg", "Paste your API key and type your domain first.", "err"); return; }
   $("acc-domain").value = domain; saveAccount();
   if (!quiet) setMsg("dom-msg", action === "check" ? "Checking DNS…" : "Connecting to Resend…");
   $("dom-connect").disabled = $("dom-check").disabled = true;
-  const d = await post("/api/domain", {api_key: key, domain, action}, 1);
+  const d = await post("/api/domain", key ? {api_key: key, domain, action} : {account_id: saved.id, domain, action}, 1);
   $("dom-connect").disabled = $("dom-check").disabled = false;
   if (d.error) { clearInterval(autoCheck); return setMsg("dom-msg", d.error, "err"); }
   renderDNS(d);
@@ -484,11 +522,10 @@ function account() {
   return {provider, api_key: $("acc-key").value.trim(), from: $("acc-from").value.trim(),
           reply_to: $("acc-replyto").value.trim(), user: $("acc-user").value.trim(), pass: $("acc-pass").value,
           from_name: $("acc-name").value.trim(), host: $("acc-host").value.trim(), port: Number($("acc-port").value) || 587,
-          cap: Number($("acc-cap").value) || PROV[provider].cap};
+          cap: Number($("acc-cap").value) || PROV[provider].cap, domain: provider === "resend" ? cleanDomain($("acc-domain").value) : ""};
 }
-const labelOf = a => `${PROV[a.provider]?.name || a.provider} · ${a.from || a.user}`;
 const formFilled = a => a.provider === "resend" ? !!(a.api_key && a.from) : !!(a.user && a.pass && (a.from || a.user.includes("@")));
-const myAddress = a => a.reply_to || a.from || a.user;
+const myAddress = a => a.reply_to || a.from || a.user || (a.label || "").split(" · ")[1] || "";
 function showProvider() {
   const p = $("acc-provider").value, meta = PROV[p], r = p === "resend";
   $("resend-fields").hidden = !r; $("smtp-fields").hidden = r;
@@ -499,8 +536,9 @@ function showProvider() {
 }
 $("acc-provider").addEventListener("change", () => { $("acc-cap").value = ""; showProvider(); saveAccount(); setMsg("acc-msg", ""); });
 
-/* saved sending accounts (this browser only) — rotated during sending */
-let accounts = store.get("scrapeer-accounts", []);
+/* saved sending accounts — stored encrypted in your account on the server; the browser only ever sees
+   id/label/provider/cap/from/reply_to/name/domain, never keys or passwords. Rotated during sending. */
+let accounts = [];
 const sentTodayVia = label => log.filter(l => l.date === today() && l.status === "sent" && l.via === label).length;
 function renderAccounts() {
   $("acct-list").innerHTML = accounts.map((a, i) => `<tr><td class="email">${esc(a.label)}</td>
@@ -509,34 +547,33 @@ function renderAccounts() {
   const total = accounts.reduce((s, a) => s + a.cap, 0);
   $("acct-total").textContent = accounts.length ? `${accounts.length} account(s) · up to ${total} emails/day` : "";
 }
-$("acct-list").onclick = e => {
+$("acct-list").onclick = async e => {
   const i = e.target.dataset?.rm; if (i == null) return;
-  if (!confirm("Remove " + accounts[i].label + "?")) return;
-  accounts.splice(Number(i), 1); store.set("scrapeer-accounts", accounts); renderAccounts();
+  const a = accounts[i]; if (!confirm("Remove " + a.label + "?")) return;
+  const d = await post("/api/me", {action: "remove_account", id: a.id}, 1);
+  if (d.error) return setMsg("acc-msg", d.error, "err");
+  accounts = accounts.filter(x => x.id !== a.id); renderAccounts();
 };
+async function addAccount(a) {
+  const d = await post("/api/me", {action: "add_account", account: a}, 0);
+  if (d.account) accounts = accounts.filter(x => x.id !== d.account.id && x.label !== d.account.label).concat(d.account);
+  return d;
+}
 $("acc-add").onclick = async () => {
   const a = account();
   if (!formFilled(a)) return setMsg("acc-msg", "Fill in the account details first.", "err");
   setMsg("acc-msg", "Testing the account…"); $("acc-add").disabled = true;
-  const d = await post("/api/send", {account: a, action: "verify"}, 0);
+  const d = await addAccount(a);
   $("acc-add").disabled = false;
   if (d.error) return setMsg("acc-msg", "Not added: " + d.error, "err");
-  const label = labelOf(a);
-  accounts = accounts.filter(x => x.label !== label).concat({...a, label});
-  store.set("scrapeer-accounts", accounts); renderAccounts();
-  setMsg("acc-msg", `✓ Added ${label}. Add another service to send more per day.`, "ok");
+  renderAccounts(); $("acc-pass").value = "";  // the secret now lives only (encrypted) on the server
+  if (a.provider !== "resend") $("acc-key").value = "";
+  setMsg("acc-msg", `✓ Added ${d.account.label} (saved encrypted to your account). Add another service to send more per day.`, "ok");
 };
-// accounts used for sending: saved ones, or the filled-in form if nothing is saved yet
-const sendingPool = () => accounts.length ? accounts : (formFilled(account()) ? [{...account(), label: labelOf(account())}] : []);
-function saveAccount() {
-  const v = Object.fromEntries(ACC.map(k => [k, $("acc-" + k).value]));
-  try {
-    if ($("acc-remember").checked) { localStorage.setItem("scrapeer-acc", JSON.stringify(v)); sessionStorage.removeItem("scrapeer-acc"); }
-    else { sessionStorage.setItem("scrapeer-acc", JSON.stringify(v)); localStorage.removeItem("scrapeer-acc"); }
-  } catch {}
-}
+const sendingPool = () => accounts;
+// the form itself is remembered on this device WITHOUT keys/passwords
+function saveAccount() { local.set("scrapeer-acc", Object.fromEntries(ACC.filter(k => k !== "key" && k !== "pass").map(k => [k, $("acc-" + k).value]))); }
 for (const k of ACC) $("acc-" + k).addEventListener("input", saveAccount);
-$("acc-remember").onchange = saveAccount;
 const setMsg = (id, text, kind) => { $(id).textContent = text; $(id).className = "msg " + (kind || ""); };
 $("acc-test").onclick = async () => {
   setMsg("acc-msg", "Connecting…"); $("acc-test").disabled = true;
@@ -547,10 +584,10 @@ $("acc-test").onclick = async () => {
 
 /* ---------- SEND: sending ---------- */
 const sentMap = () => store.get("scrapeer-sent", {});
-let log = store.get("scrapeer-log", []);
+let log = [];  // loaded from your account after sign-in
 function record(email, status, note, via) {
   log.unshift({when: new Date().toLocaleString(), date: today(), email, status, note: note || "", via: via || ""});
-  log = log.slice(0, 20000); store.set("scrapeer-log", log);
+  log = log.slice(0, 3000); store.set("scrapeer-log", log);
   if (status === "sent") { const s = sentMap(); s[email] = today(); store.set("scrapeer-sent", s); }
   renderLog(); renderAccounts();
 }
@@ -582,7 +619,7 @@ $("send-test").onclick = async () => {
   for (const a of sendingPool()) {  // one test per account, so you see which ones land in spam
     const me = myAddress(a), sample = recipients[pvIdx] || enrich({email: me});
     setMsg("send-msg", `Sending test via ${a.label} to ${me}…`);
-    const m = compose(sample), d = await post("/api/send", {account: a, to: me, subject: `[TEST via ${PROV[a.provider]?.name}] ` + m.subject, body: m.body}, 0);
+    const m = compose(sample), d = await post("/api/send", {account_id: a.id, to: me, subject: `[TEST via ${PROV[a.provider]?.name}] ` + m.subject, body: m.body}, 0);
     out.push(d.error ? `✗ ${a.label}: ${d.error}` : `✓ ${a.label}`);
   }
   $("send-test").disabled = false;
@@ -618,7 +655,7 @@ $("send-start").onclick = async () => {
     while ((a = pick())) {  // an account that can't log in is dropped and the same person goes to the next account
       setMsg("send-msg", `Sending to ${r.email} via ${a.label}…`);
       const m = compose(r);
-      d = await post("/api/send", {account: a, to: r.email, subject: m.subject, body: m.body}, 1);
+      d = await post("/api/send", {account_id: a.id, to: r.email, subject: m.subject, body: m.body}, 1);
       if (d.error && /Login refused|connect to|API key|domain|verified|not allowed|suspend|limit|quota/i.test(d.error)) {
         dead.add(a.label); record(r.email, "failed", "account dropped: " + d.error, a.label); continue;
       }
@@ -645,11 +682,7 @@ $("send-start").onclick = async () => {
 };
 
 /* ---------- INBOX: delivery status + replies, read live from your Resend account(s) ---------- */
-const resendAccounts = () => {
-  const list = accounts.filter(a => a.provider === "resend" && a.api_key), cur = account();
-  if (cur.provider === "resend" && cur.api_key && !list.some(a => a.api_key === cur.api_key)) list.push({...cur, label: labelOf(cur)});
-  return list.filter((a, i) => list.findIndex(b => b.api_key === a.api_key) === i);  // one entry per key
-};
+const resendAccounts = () => accounts.filter(a => a.provider === "resend");
 const addrOf = s => (String(s || "").match(/[^\s<>"]+@[^\s<>"]+/) || [""])[0].toLowerCase();
 const fmtTime = s => { const d = new Date(String(s || "").replace(" ", "T").replace(/\+00(:00)?$/, "Z")); return isNaN(d) ? String(s || "") : d.toLocaleString(); };
 const EVENT = {delivered: ["Delivered", "sent"], opened: ["Opened", "high"], clicked: ["Clicked", "high"],
@@ -665,8 +698,7 @@ async function loadInbox() {
   if (!accs.length) { setMsg("ib-msg", "Add a Resend account in the Send tab to see delivery status and replies here.", "err"); return; }
   if (inboxBusy) return; inboxBusy = true;
   setMsg("ib-msg", "Loading…"); $("ib-refresh").disabled = true;
-  const keys = accs.map(a => a.api_key);
-  const [sent, inbox] = await Promise.all([post("/api/track", {keys, action: "sent"}, 1), post("/api/track", {keys, action: "inbox"}, 1)]);
+  const [sent, inbox] = await Promise.all([post("/api/track", {action: "sent"}, 1), post("/api/track", {action: "inbox"}, 1)]);
   inboxBusy = false; $("ib-refresh").disabled = false;
   if (sent.error || inbox.error) return setMsg("ib-msg", sent.error || inbox.error, "err");
   setMsg("ib-msg", "");
@@ -697,7 +729,7 @@ $("ib-replies").onclick = async e => {
   openReply = r; $("ib-reader").hidden = false; setMsg("rd-msg", "");
   $("rd-from").textContent = `From ${r.from} · ${fmtTime(r.created_at)}`; $("rd-subj").textContent = r.subject || "(no subject)";
   $("rd-body").textContent = "Loading…"; $("rd-reply").value = "";
-  const d = await post("/api/track", {keys: accs.map(a => a.api_key), action: "read", key: r.key, id: r.id}, 1);
+  const d = await post("/api/track", {action: "read", key: r.key, id: r.id}, 1);
   if (openReply !== r) return;
   $("rd-body").textContent = d.error || d.text || "(empty message)";
   if (!d.error) { openReply.message_id = d.message_id || r.message_id; const s = readSet(); s.add(r.id); store.set("scrapeer-read", [...s].slice(-5000)); b.style.fontWeight = 400; b.firstChild.textContent = b.firstChild.textContent.replace("● ", ""); }
@@ -706,10 +738,10 @@ $("ib-replies").onclick = async e => {
 $("rd-send").onclick = async () => {
   const r = openReply, text = $("rd-reply").value.trim();
   if (!r || !text) return setMsg("rd-msg", "Write your reply first.", "err");
-  const acc = resendAccounts()[r.key]; if (!acc) return setMsg("rd-msg", "That Resend account was removed.", "err");
+  const acc = accounts.find(a => a.id === r.account_id); if (!acc) return setMsg("rd-msg", "That Resend account was removed.", "err");
   const to = addrOf(r.from), subject = /^re:/i.test(r.subject || "") ? r.subject : "Re: " + (r.subject || "");
   setMsg("rd-msg", "Sending…"); $("rd-send").disabled = true;
-  const d = await post("/api/send", {account: acc, to, subject, body: text, in_reply_to: r.message_id}, 1);
+  const d = await post("/api/send", {account_id: acc.id, to, subject, body: text, in_reply_to: r.message_id}, 1);
   $("rd-send").disabled = false;
   if (d.error) return setMsg("rd-msg", d.error, "err");
   record(to, "sent", "reply", acc.label); $("rd-reply").value = "";
@@ -719,21 +751,110 @@ $("rd-send").onclick = async () => {
 /* ---------- restore ---------- */
 function saveDraft() { store.set("scrapeer-draft", {recips: $("recips").value, subject: $("subject").value, body: $("body").value,
   footer: $("footer").value, delay: $("delay").value, cap: $("cap").value}); }
-(() => {
+function restoreUI() {
+  log = store.get("scrapeer-log", []);
   const d = store.get("scrapeer-draft", {});
   if (d.cap === "50") d.cap = "";  // old default would silently cap rotation at 50
   for (const k of ["recips", "subject", "body", "footer", "delay", "cap"]) if (d[k] != null) $(k).value = d[k];
   $("dne").value = store.get("scrapeer-dne", "");
-  let acc = null;
-  try { acc = JSON.parse(localStorage.getItem("scrapeer-acc")); if (acc) $("acc-remember").checked = true;
-        else acc = JSON.parse(sessionStorage.getItem("scrapeer-acc")); } catch {}
-  if (acc) for (const k of ACC) if (acc[k] != null && acc[k] !== "") $("acc-" + k).value = acc[k];
+  const acc = local.get("scrapeer-acc", null);
+  if (acc) for (const k of ACC) if (acc[k] != null && acc[k] !== "" && k !== "key" && k !== "pass") $("acc-" + k).value = acc[k];
   showProvider();
   $("acc-from").dataset.auto = nameLocal(); updateFromPreview();
-  if ($("acc-provider").value === "resend" && $("acc-key").value && $("acc-domain").value) domainStep("connect", true);
+  if ($("acc-provider").value === "resend" && $("acc-domain").value) domainStep("connect", true);
   parseRecips(); renderLog(); renderAccounts();
-  let tab = "find"; try { tab = localStorage.getItem("scrapeer-tab") || "find"; } catch {}
-  showTab(tab);
+  showTab(local.get("scrapeer-tab", "find") || "find");
+}
+
+/* ---------- sign in / sign up (Supabase Auth: passwords never touch our server) ---------- */
+let authMode = "signin";
+const AUTH = {
+  signin: ["Sign in", "Sign in", "No account? Create one"],
+  signup: ["Create your account", "Create account", "Already have an account? Sign in"],
+  forgot: ["Reset your password", "Email me a reset link", "Back to sign in"],
+  reset: ["Choose a new password", "Save new password", ""],
+};
+function setAuthMode(m) {
+  authMode = m; const [title, btn, sw] = AUTH[m];
+  $("auth-title").textContent = title; $("auth-go").textContent = btn; $("auth-switch").textContent = sw;
+  $("auth-switch").hidden = !sw; $("auth-forgot").hidden = m !== "signin";
+  $("auth-email-wrap").hidden = m === "reset"; $("auth-pass-wrap").hidden = m === "forgot";
+  $("auth-pass-label").textContent = m === "reset" ? "New password (8+ characters)" : m === "signup" ? "Password (8+ characters)" : "Password";
+  $("auth-pass").autocomplete = m === "signin" ? "current-password" : "new-password";
+  setMsg("auth-msg", "");
+}
+function showAuth(msg) {
+  signedIn = false;
+  for (const id of ["find", "send", "inbox"]) $(id).hidden = true;
+  $("nav").hidden = $("who").hidden = true; $("auth").hidden = false;
+  if (msg) setMsg("auth-msg", msg, "err");
+}
+$("auth-switch").onclick = e => { e.preventDefault(); setAuthMode(authMode === "signin" ? "signup" : "signin"); };
+$("auth-forgot").onclick = e => { e.preventDefault(); setAuthMode("forgot"); };
+$("auth-form").onsubmit = async e => {
+  e.preventDefault();
+  if (!sb) return setMsg("auth-msg", "Sign-in isn't set up yet.", "err");
+  const email = $("auth-email").value.trim(), password = $("auth-pass").value;
+  if (authMode !== "reset" && !/^\S+@\S+\.\S+$/.test(email)) return setMsg("auth-msg", "Enter your email address.", "err");
+  if (authMode !== "forgot" && password.length < 8) return setMsg("auth-msg", "Password must be at least 8 characters.", "err");
+  $("auth-go").disabled = true; setMsg("auth-msg", "One moment…");
+  let res;
+  if (authMode === "signin") res = await sb.auth.signInWithPassword({email, password});
+  else if (authMode === "signup") res = await sb.auth.signUp({email, password, options: {emailRedirectTo: location.origin}});
+  else if (authMode === "forgot") res = await sb.auth.resetPasswordForEmail(email, {redirectTo: location.origin});
+  else res = await sb.auth.updateUser({password});
+  $("auth-go").disabled = false;
+  if (res.error) return setMsg("auth-msg", res.error.message, "err");
+  $("auth-pass").value = "";
+  if (authMode === "signup" && !res.data.session) return setMsg("auth-msg", "✓ Check your email and click the link to confirm, then sign in.", "ok");
+  if (authMode === "forgot") return setMsg("auth-msg", "✓ If that email has an account, a reset link is on its way.", "ok");
+  const { data } = await sb.auth.getSession();
+  if (data.session) { history.replaceState(null, "", location.pathname); setAuthMode("signin"); enterApp(data.session); }
+};
+$("signout").onclick = async () => { await saveState(); await sb.auth.signOut(); location.reload(); };
+
+// one-time move of anything an older version kept in this browser (incl. keys!) into the account
+async function migrateLocal() {
+  const old = local.get("scrapeer-accounts", []);
+  for (const a of old) { const d = await addAccount(a); if (d.error) console.warn("couldn't move", a.label, d.error); }
+  local.del("scrapeer-accounts");
+  let moved = false;
+  for (const [k, field] of Object.entries(SYNCED)) {
+    const v = local.get(k, null);
+    if (v != null && state[field] == null) { state[field] = v; moved = true; }
+    local.del(k);
+  }
+  const acc = local.get("scrapeer-acc", null);
+  if (acc && (acc.key || acc.pass)) { delete acc.key; delete acc.pass; local.set("scrapeer-acc", acc); }
+  try { sessionStorage.removeItem("scrapeer-acc"); } catch {}
+  if (moved) await saveState();
+}
+
+let entering = false;
+async function enterApp(session) {
+  if (signedIn || entering) return; entering = true;
+  $("auth").hidden = true; $("who-email").textContent = session.user.email;
+  const me = await post("/api/me", {action: "load"}, 2);
+  entering = false;
+  if (me.error) return showAuth(me.error);
+  signedIn = true; accounts = me.accounts || []; state = me.state || {};
+  $("nav").hidden = $("who").hidden = false;
+  await migrateLocal();
+  restoreUI();
+}
+
+(async function boot() {
+  setAuthMode(/type=recovery/.test(location.hash) ? "reset" : "signin");  // arrived from a password-reset email
+  const cfg = await fetch("/api/config").then(r => r.json()).catch(() => ({}));
+  if (!cfg.url || !cfg.anon || !window.supabase) return showAuth("Sign-in isn't set up yet (the database isn't connected).");
+  sb = window.supabase.createClient(cfg.url, cfg.anon);
+  sb.auth.onAuthStateChange((event, session) => {
+    if (event === "PASSWORD_RECOVERY") { setAuthMode("reset"); showAuth(); return; }
+    if (event === "SIGNED_OUT") return;
+    if (session && authMode !== "reset" && !signedIn) enterApp(session);
+  });
+  const { data } = await sb.auth.getSession();
+  if (data.session && authMode !== "reset") enterApp(data.session); else if (!signedIn) showAuth();
 })();
 </script>
 </body>

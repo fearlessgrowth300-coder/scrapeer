@@ -13,7 +13,8 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlencode
 
 sys.path.insert(0, os.path.dirname(__file__))
-from send import Bad, resend_api  # noqa: E402
+from _auth import Bad, load_account, serve  # noqa: E402
+from send import resend_api  # noqa: E402
 
 DOMAIN = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}")
 DMARC = "v=DMARC1; p=none;"
@@ -67,8 +68,10 @@ def domain_info(key, domain_id, receiving):
             "receiving": receiving}
 
 
-def handle(body):
+def handle(body, user):
     key = str(body.get("api_key", "")).strip()
+    if not key and body.get("account_id"):
+        key = str(load_account(user["id"], body["account_id"]).get("api_key", ""))
     domain = str(body.get("domain", "")).strip().lower()
     if not key.startswith("re_"):
         raise Bad("Paste your Resend API key (it starts with re_).")
@@ -96,18 +99,4 @@ def handle(body):
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
-        try:
-            data = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 4096)) or b"{}")
-            self._send(200, handle(data))
-        except Bad as e:
-            self._send(400, {"error": str(e)})
-        except Exception as e:
-            self._send(500, {"error": f"Server error ({type(e).__name__})"})
-
-    def _send(self, code, data):
-        out = json.dumps(data).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(out)))
-        self.end_headers()
-        self.wfile.write(out)
+        serve(self, handle, limit=4096)
