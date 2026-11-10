@@ -40,3 +40,31 @@ P.set(accs, [
   mjChat.msgs.push({id: "log-2", dir: "out", at: Date.now() - 60000, status: "other"});
   ok(P.statuses(mjChat).get(mjChat.msgs[1]) === "opened", "…and that message turns blue ✓✓");
 })();
+
+// Reply placement: the user's three real replies on 2026-11-10 must land in Resend, Mailjet and Brevo chats.
+(async () => {
+  const ok = (c, msg) => { console.log((c ? "PASS " : "FAIL ") + msg); if (!c) process.exitCode = 1; };
+  const BR = "br-acc", who = "harpergvn@gmail.com";
+  const accs = [{id: "rs-acc", label: "Resend · adebayor@legacyfalcon.tech", provider: "resend", from: "adebayor@legacyfalcon.tech"},
+                {id: "mj-acc", label: "Mailjet · adebayor@legacyfalcon.tech", provider: "mailjet", from: "adebayor@legacyfalcon.tech"},
+                {id: BR, label: "Brevo · adebayo@legacyfalcon.tech", provider: "brevo", from: "adebayo@legacyfalcon.tech"}];
+  const sent = {emails: [{id: "re-1", key: 0, account_id: "rs-acc", to: who, subject: "[TEST] OKAY NA ME", last_event: "delivered",
+                          created_at: "2026-11-10 22:11:42+00", message_id: "<RES-1@resend.dev>"}]};
+  const replies = {replies: [
+    {id: "in-1", key: 0, account_id: "rs-acc", from: who, subject: "Re: [TEST] OKAY NA ME", created_at: "2026-11-10T22:19:08Z"},
+    {id: "in-2", key: 0, account_id: "rs-acc", from: who, subject: "Re: [TEST] OKAY NA ME", created_at: "2026-11-10T22:19:25Z"},
+    {id: "in-3", key: 0, account_id: "rs-acc", from: who, subject: "Re: [TEST] why are you here", created_at: "2026-11-10T22:19:36Z"}]};
+  const refs = {"in-1": ["<res-1@resend.dev>"], "in-2": ["<mj-rewritten-by-mailjet@mailjet.com>"], "in-3": ["<brevo-own-id@smtp-brevo.com>"]};
+  const log = [  // newest first, as the app stores it; Mailjet/Brevo IDs were rewritten so ours don't match
+    {status: "test", email: who, via: accs[1].label, subj: "[TEST] OKAY NA ME", snip: "HELLO ME", ts: Date.parse("2026-11-10T22:10:30Z"), mid: "<ours-1@legacyfalcon.tech>"},
+    {status: "test", email: who, via: accs[2].label, subj: "[TEST] why are you here", snip: "hi", ts: Date.parse("2026-11-10T22:08:20Z")}];
+  const P2 = (() => { const m = {exports: {}}; new Function("module", "require", src + `
+;module.exports = {go: async (a, l, s, r, f) => { accounts = a; log = l; signedIn = true;
+  post = async (u, b) => b.action === "sent" ? s : b.action === "inbox" ? r : b.action === "refs" ? {refs: f} : {};
+  state = {}; await loadInbox(true); clearInterval(inboxTimer); return convos; }};`)(m, require); return m.exports; })();
+  const convos = await P2.go(accs, log, sent, replies, refs);
+  const where = id => [...convos.values()].find(c => c.msgs.some(m => m.id === id))?.account_id;
+  ok(where("in-1") === "rs-acc", "reply quoting the Resend email → Resend chat");
+  ok(where("in-2") === "mj-acc", "reply to the Mailjet email → Mailjet chat (Resend ruled out by its ID)");
+  ok(where("in-3") === BR, "reply to the Brevo email → Brevo chat (subject match)");
+})();

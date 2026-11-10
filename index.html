@@ -122,7 +122,7 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
 <body>
 <header><div class="wrap">
   <div class="logo">Scrape<span>er</span></div>
-  <nav role="tablist" id="nav" hidden><button role="tab" id="tab-find" aria-selected="true">Find emails</button><button role="tab" id="tab-send" aria-selected="false">Send</button><button role="tab" id="tab-inbox" aria-selected="false">Inbox <span id="ib-badge"></span></button></nav>
+  <nav role="tablist" id="nav" hidden><button role="tab" id="tab-find" aria-selected="true">Find emails</button><button role="tab" id="tab-send" aria-selected="false">Send</button><button role="tab" id="tab-inbox" aria-selected="false">Inbox <span id="ib-badge" class="unread" hidden></span></button></nav>
   <div id="who" hidden><button class="ghost" id="alerts" title="Get a desktop alert when someone opens or replies">🔔 Alerts</button><span class="hint" id="who-email" style="margin:0"></span><button class="ghost" id="signout">Sign out</button></div>
 </div></header>
 
@@ -298,7 +298,7 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
       <div class="chat-stats" id="ib-stats"></div>
       <div class="msg" id="ib-msg" role="status" style="padding:0 12px"></div>
       <div class="convos" id="ib-convos"></div>
-      <p class="hint chat-note">✓ sent · ✓✓ delivered · <span class="tick-read">✓✓</span> opened (approximate). Email has no "typing…" or "online" status.</p>
+      <p class="hint chat-note">✓ sent · ✓✓ delivered · <span class="tick-read">✓✓</span> opened. Gmail and Apple Mail load images by themselves when an email arrives, so real opens can't be seen for those inboxes — replies are the reliable signal. Email has no "typing…" or "online" status.</p>
     </aside>
     <div class="chat-main">
       <div class="chat-empty" id="chat-empty">Select a conversation</div>
@@ -322,7 +322,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 // Private data (sent log, already-emailed, do-not-email, drafts, read replies) lives in your account on the server;
 // only harmless UI preferences stay in this browser.
-const SYNCED = {"scrapeer-log": "log", "scrapeer-sent": "sent", "scrapeer-dne": "dne", "scrapeer-draft": "draft", "scrapeer-read": "read", "scrapeer-reply": "reply", "scrapeer-order": "order"};
+const SYNCED = {"scrapeer-log": "log", "scrapeer-sent": "sent", "scrapeer-dne": "dne", "scrapeer-draft": "draft", "scrapeer-read": "read", "scrapeer-reply": "reply", "scrapeer-order": "order", "scrapeer-refs": "refs"};
 let state = {}, saveTimer = null, sb = null, signedIn = false;
 const local = {get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
@@ -686,9 +686,10 @@ $("reply-check").onclick = () => replyStep("reply_check");
 /* ---------- SEND: sending ---------- */
 const sentMap = () => store.get("scrapeer-sent", {});
 let log = [];  // loaded from your account after sign-in
-function record(email, status, note, via, subj, body) {
+function record(email, status, note, via, subj, body, mid) {
   log.unshift({when: new Date().toLocaleString(), date: today(), ts: Date.now(), email, status, note: note || "", via: via || "",
-               ...(subj ? {subj: String(subj).slice(0, 200)} : {}), ...(body ? {snip: String(body).slice(0, 300)} : {})});
+               ...(subj ? {subj: String(subj).slice(0, 200)} : {}), ...(body ? {snip: String(body).slice(0, 300)} : {}),
+               ...(mid ? {mid: String(mid).toLowerCase()} : {})});
   log = log.slice(0, 3000); store.set("scrapeer-log", log);
   if (status === "sent") { const s = sentMap(); s[email] = today(); store.set("scrapeer-sent", s); }
   renderLog(); renderAccounts();
@@ -723,7 +724,7 @@ $("send-test").onclick = async () => {
   const m = compose(sample), d = await post("/api/send", {account_id: a.id, to: me, subject: "[TEST] " + m.subject, body: m.body, reply_to: replyAddr()}, 0);
   $("send-test").disabled = false;
   if (d.error) return setMsg("send-msg", `✗ ${a.label}: ${d.error}`, "err");
-  record(me, "test", "", a.label, "[TEST] " + m.subject, m.body);
+  record(me, "test", "", a.label, "[TEST] " + m.subject, m.body, d.message_id);
   setMsg("send-msg", `✓ Test sent via ${a.label} to ${me} — check your inbox (and spam). To test another account, move it to the top with ↑.`, "ok");
 };
 
@@ -769,7 +770,7 @@ $("send-start").onclick = async () => {
     if (d.error) {
       fails++; consecutiveFails++; record(r.email, "failed", d.error, a.label);
       if (consecutiveFails >= 5) { stopReason = "Stopped after 5 failures in a row: " + d.error; break; }
-    } else { sent++; consecutiveFails = 0; { const m = compose(r); record(r.email, "sent", "", a.label, m.subject, m.body); } }
+    } else { sent++; consecutiveFails = 0; { const m = compose(r); record(r.email, "sent", "", a.label, m.subject, m.body, d.message_id); } }
     i++; done++;
     $("st-sent").textContent = sent; $("st-failed").textContent = fails; $("send-fill").style.width = (100 * done / queue.length) + "%";
     if (done < queue.length && sending) {
@@ -824,21 +825,33 @@ async function loadInbox(quiet) {
     return map.get(key);
   };
   for (const e of sent.emails || []) { const to = addrOf(e.to); if (to && !mine.has(to))
-    convo(e.account_id, to).msgs.push({id: e.id, dir: "out", key: e.key, account_id: e.account_id, subject: e.subject, at: tsOf(e.created_at), status: e.last_event}); }
+    convo(e.account_id, to).msgs.push({id: e.id, dir: "out", key: e.key, account_id: e.account_id, subject: e.subject, at: tsOf(e.created_at), status: e.last_event, mid: String(e.message_id || "").toLowerCase()}); }
   // Brevo/Mailjet/Gmail give no history back: use what we saved when sending
   log.forEach((l, i) => { if ((l.status === "sent" || l.status === "test") && l.via && !l.via.startsWith("Resend")) {
     const acc = accounts.find(a => a.label === l.via);
     convo(acc ? acc.id : "via:" + l.via, l.email, l.via).msgs.push({id: "log-" + i, dir: "out", subject: l.subj || "", text: l.snip || "(message text wasn't saved)",
-      at: l.ts || Date.parse(l.date) || 0, status: "other", via: l.via});
+      at: l.ts || Date.parse(l.date) || 0, status: "other", via: l.via, mid: l.mid});
   } });
   for (const p of pending) { const c = map.get(p.key) || convo(p.account_id, p.to);
     if (!c.msgs.some(m => m.dir === "out" && m !== p.msg && Math.abs(m.at - p.msg.at) < 180000)) c.msgs.push(p.msg); }
-  // every reply comes in through Resend: put it in the chat of the account that last emailed that person before it
+  // every reply comes in through Resend. Put it in the chat of the EXACT email it answers:
+  // 1) its In-Reply-To/References point at one of our Message-IDs; 2) else same subject, ruling out emails whose
+  // Message-ID we know didn't match; 3) else the account that last emailed that person before the reply.
+  const refs = store.get("scrapeer-refs", {}), need = (inbox.replies || []).filter(r => !(r.id in refs)).slice(0, 40);
+  if (need.length) {
+    const d = await post("/api/track", {action: "refs", items: need.map(r => ({id: r.id, key: r.key}))}, 1);
+    if (d.refs) { Object.assign(refs, d.refs); const keep = Object.keys(refs).slice(-500); store.set("scrapeer-refs", Object.fromEntries(keep.map(k => [k, refs[k]]))); }
+  }
   for (const r of inbox.replies || []) {
     const from = addrOf(r.from); if (!from || mine.has(from)) continue;
-    const at = tsOf(r.created_at);
-    let best = null, bestAt = -1;
-    for (const c of map.values()) if (c.email === from) for (const m of c.msgs) if (m.dir === "out" && m.at <= at && m.at > bestAt) { best = c; bestAt = m.at; }
+    const at = tsOf(r.created_at), ids = refs[r.id] || [];
+    const outs = [...map.values()].filter(c => c.email === from).flatMap(c => c.msgs.filter(m => m.dir === "out" && m.at <= at + 60000).map(m => ({c, m})));
+    const latest = list => list.sort((a, b) => b.m.at - a.m.at)[0];
+    const ruledOut = o => o.m.key != null && o.m.mid && ids.length && !ids.includes(o.m.mid);
+    const pick = outs.find(o => o.m.mid && ids.includes(o.m.mid))
+      || latest(outs.filter(o => plainSubj(o.m.subject) === plainSubj(r.subject) && !ruledOut(o)))
+      || latest(outs.filter(o => !ruledOut(o))) || latest(outs);
+    const best = pick?.c;
     const c = best || convo(r.account_id, from);
     c.name = nameOf(r.from) || c.name;
     c.msgs.push({id: r.id, dir: "in", key: r.key, account_id: r.account_id, subject: r.subject, at, message_id: r.message_id});
@@ -849,7 +862,7 @@ async function loadInbox(quiet) {
     c.unread = c.msgs.filter(m => m.dir === "in" && !read.has(m.id)).length;
   }
   convos = map;
-  $("ib-badge").textContent = unreadTotal() ? `(${unreadTotal()})` : "";
+  { const u = unreadTotal(); $("ib-badge").textContent = u; $("ib-badge").hidden = !u; }
   const outs = [...map.values()].flatMap(c => { const st = statuses(c); return c.msgs.filter(m => m.dir === "out" && !String(m.id).startsWith("tmp")).map(m => st.get(m)); });
   const count = k => outs.filter(s => k.includes(s)).length;
   $("ib-stats").innerHTML = [["Sent", outs.length], ["Delivered", count(["delivered", "opened", "clicked"])], ["Opened", count(["opened", "clicked"])],
@@ -882,7 +895,7 @@ function openConvo(key) {
   $("chat-empty").hidden = true;
   const c = convos.get(key), s = readSet();
   c.msgs.filter(m => m.dir === "in").forEach(m => s.add(m.id)); store.set("scrapeer-read", [...s].slice(-5000)); c.unread = 0;
-  $("ib-badge").textContent = unreadTotal() ? `(${unreadTotal()})` : "";
+  { const u = unreadTotal(); $("ib-badge").textContent = u; $("ib-badge").hidden = !u; }
   renderConvos(); renderThread(true); fetchBodies(); $("compose").focus();
 }
 $("chat-back").onclick = () => { activeKey = null; $("chat").classList.remove("open"); renderConvos(); };
@@ -933,7 +946,7 @@ $("composer").onsubmit = async e => {
   c.msgs.push(msg); c.last = msg; $("compose").value = ""; $("compose").style.height = "44px"; renderThread(true); renderConvos();
   const d = await post("/api/send", {account_id: acc.id, to: c.email, subject, body: text, in_reply_to: lastIn?.message_id, reply_to: replyAddr()}, 1);
   if (d.error) { msg.status = "failed"; renderThread(); return setMsg("ib-msg", d.error, "err"); }
-  record(c.email, "sent", "reply", acc.label, subject, text);
+  record(c.email, "sent", "reply", acc.label, subject, text, d.message_id);
   msg.status = acc.provider === "resend" ? "sent" : "other"; if (d.id) { bodies[d.id] = text; msg.email_id = d.id; }
   if (acc.provider === "resend") { pending.push({key: c.key, account_id: acc.id, to: c.email, msg}); pending = pending.slice(-20); }
   renderThread(); setTimeout(() => loadInbox(true), 4000);
@@ -1020,7 +1033,8 @@ async function pollEvents() {
       const list = $("dne").value.trim(); if (!list.toLowerCase().includes(who)) { $("dne").value = (list ? list + "\n" : "") + who; store.set("scrapeer-dne", $("dne").value); }
     }
   }
-  if (!first && d.events.length && !$("inbox").hidden) inboxChanged ? loadInbox(true) : (renderConvos(), renderThread());
+  if (!first && inboxChanged) loadInbox(true);  // updates the unread count on the Inbox tab, whichever tab you're on
+  else if (!first && d.events.length && !$("inbox").hidden) { renderConvos(); renderThread(); }
   else if (d.events.length) { renderConvos(); if (activeKey) renderThread(); }
 }
 function startLive() {

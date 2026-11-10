@@ -64,6 +64,15 @@ QUOTE_STARTS = [
 ]
 
 
+def reply_refs(headers):
+    """Message-IDs a reply points back to, newest first (In-Reply-To, then References)."""
+    if isinstance(headers, list):  # [{"name": .., "value": ..}] form
+        headers = {h.get("name", ""): h.get("value", "") for h in headers if isinstance(h, dict)}
+    h = {str(k).lower(): str(v) for k, v in (headers or {}).items()}
+    ids = re.findall(r"<[^<>\s]+>", h.get("in-reply-to", "")) + re.findall(r"<[^<>\s]+>", h.get("references", ""))[::-1]
+    return list(dict.fromkeys(i.lower() for i in ids))[:20]
+
+
 def strip_quoted(text):
     """Keep only what the person actually wrote, like a chat message."""
     cut = min([m.start() for p in QUOTE_STARTS for m in [p.search(text)] if m] or [len(text)])
@@ -80,12 +89,20 @@ def handle(body, user):
     action = body.get("action")
     if action == "sent":
         return {"emails": [{"id": e.get("id"), "key": i, "account_id": accts[i]["id"], "to": (e.get("to") or [""])[0],
-                            "subject": e.get("subject"), "last_event": e.get("last_event"), "created_at": e.get("created_at")}
+                            "subject": e.get("subject"), "last_event": e.get("last_event"), "created_at": e.get("created_at"),
+                            "message_id": e.get("message_id")}
                            for i, k in enumerate(keys) for e in all_pages(k, "/emails", 10)]}
     if action == "inbox":
         return {"replies": [{"id": e.get("id"), "key": i, "account_id": accts[i]["id"], "from": e.get("from"),
                              "subject": e.get("subject"), "created_at": e.get("created_at"), "message_id": e.get("message_id")}
                             for i, k in enumerate(keys) for e in all_pages(k, "/emails/receiving", 3)]}
+    if action == "refs":  # which of our emails each reply answers (In-Reply-To / References headers)
+        out = {}
+        for it in (body.get("items") or [])[:40]:
+            rid, i = str(it.get("id", "")), int(it.get("key") or 0)
+            if UUID.fullmatch(rid) and 0 <= i < len(keys):
+                out[rid] = reply_refs(call(keys[i], f"/emails/receiving/{rid}").get("headers"))
+        return {"refs": out}
     if action == "bodies":
         out = {}
         for it in (body.get("items") or [])[:40]:
@@ -105,6 +122,8 @@ def _selfcheck():
     assert strip_quoted("Yes!\n-----Original Message-----\nFrom: me") == "Yes!"
     assert strip_quoted("> only quotes") == "> only quotes"  # never return an empty bubble
     assert to_text("<p>Hi</p><blockquote>old stuff</blockquote>") == "Hi"
+    assert reply_refs({"In-Reply-To": "<b@x>", "References": "<a@x> <B@x>"}) == ["<b@x>", "<a@x>"]
+    assert reply_refs([{"name": "in-reply-to", "value": "<c@y>"}]) == ["<c@y>"] and reply_refs(None) == []
     print("track selfcheck ok")
 
 
