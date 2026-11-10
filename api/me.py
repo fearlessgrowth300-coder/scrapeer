@@ -34,7 +34,7 @@ def mailjet_hook(acct, url):
     auth = {"Authorization": "Basic " + base64.b64encode(f"{acct.get('user', '')}:{acct.get('pass', '')}".encode()).decode()}
     code, data = _http("GET", "https://api.mailjet.com/v3/REST/eventcallbackurl?Limit=100", auth)
     if code != 200:
-        return "Mailjet refused the API key/secret"
+        return f"Mailjet refused the API key/secret ({code} {str((data or {}).get('ErrorMessage') or '')[:120]})"
     have = {d.get("EventType"): d for d in (data or {}).get("Data", [])}
     busy = []
     for et in MJ_EVENTS:
@@ -54,6 +54,17 @@ def mailjet_hook(acct, url):
     return f"Mailjet already sends {', '.join(busy)} events to another app" if busy else ""
 
 
+def brevo_reason(code, data):
+    """Brevo's own words, plus the fix for the two usual causes."""
+    msg = str((data or {}).get("message") or (data or {}).get("code") or "")[:160] if isinstance(data, dict) else ""
+    low = msg.lower()
+    if "ip" in low.split() or "ip address" in low or "unrecognised" in low or "unrecognized" in low:
+        return f"Brevo is blocking unknown IPs for API keys — Brevo → Settings → Security → Authorized IPs → 'Deactivate for API keys'. (Brevo said: {msg})"
+    if code in (401, 403) or "key" in low:
+        return f"Brevo didn't accept the API key — use the xkeysib- key from Settings → SMTP & API → API Keys. (Brevo said: {code} {msg})"
+    return f"Brevo error {code}: {msg}"
+
+
 def brevo_hook(acct, url):
     """Brevo: needs a Brevo *API* key (the SMTP key can't manage webhooks)."""
     key = str(acct.get("api_key") or "")
@@ -62,12 +73,12 @@ def brevo_hook(acct, url):
     h = {"api-key": key, "accept": "application/json", "content-type": "application/json"}
     code, data = _http("GET", "https://api.brevo.com/v3/webhooks?type=transactional", h)
     if code != 200:
-        return "Brevo refused the API key"
+        return brevo_reason(code, data)
     if any(w.get("url") == url for w in (data or {}).get("webhooks", [])):
         return ""
     code, data = _http("POST", "https://api.brevo.com/v3/webhooks", h,
                        {"url": url, "description": "Scrapeer ticks & pop-ups", "events": BREVO_EVENTS, "type": "transactional"})
-    return "" if code < 400 else "Brevo didn't accept the webhook: " + str((data or {}).get("message") or code)
+    return "" if code < 400 else brevo_reason(code, data)
 
 
 def ensure_hooks(user):
