@@ -721,7 +721,7 @@ $("send-test").onclick = async () => {
   const m = compose(sample), d = await post("/api/send", {account_id: a.id, to: me, subject: "[TEST] " + m.subject, body: m.body, reply_to: replyAddr()}, 0);
   $("send-test").disabled = false;
   if (d.error) return setMsg("send-msg", `✗ ${a.label}: ${d.error}`, "err");
-  record(me, "test", "", a.label);
+  record(me, "test", "", a.label, "[TEST] " + m.subject, m.body);
   setMsg("send-msg", `✓ Test sent via ${a.label} to ${me} — check your inbox (and spam). To test another account, move it to the top with ↑.`, "ok");
 };
 
@@ -823,7 +823,7 @@ async function loadInbox(quiet) {
   for (const r of inbox.replies || []) { const from = addrOf(r.from); if (from && !mine.has(from))
     convo(from, nameOf(r.from)).msgs.push({id: r.id, dir: "in", key: r.key, account_id: r.account_id, subject: r.subject, at: tsOf(r.created_at), message_id: r.message_id}); }
   // sent through Brevo/Mailjet/Gmail: those services give no history back, so show what we saved when sending
-  log.forEach((l, i) => { if (l.status === "sent" && l.via && !l.via.startsWith("Resend"))
+  log.forEach((l, i) => { if ((l.status === "sent" || l.status === "test") && l.via && !l.via.startsWith("Resend"))
     convo(l.email).msgs.push({id: "log-" + i, dir: "out", subject: l.subj || "", text: l.snip || "(message text wasn't saved)", at: l.ts || Date.parse(l.date) || 0, status: "other", via: l.via}); });
   // just-sent replies that Resend hasn't listed yet
   for (const p of pending) { const c = convo(p.to); if (!c.msgs.some(m => m.dir === "out" && m.key != null && Math.abs(m.at - p.msg.at) < 180000)) c.msgs.push(p.msg); }
