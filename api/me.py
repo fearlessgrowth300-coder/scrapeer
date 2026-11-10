@@ -126,6 +126,26 @@ def ensure_hooks(user):
     return out
 
 
+def log_key(entry):
+    """Identity of one log line (old lines have no ts: fall back to the 'when' text)."""
+    return f"{entry.get('ts') or entry.get('when')}|{entry.get('email')}|{entry.get('status')}|{entry.get('via')}"
+
+
+def merge_state(cur, new):
+    """Union of history from every tab/device: nothing already saved can be dropped by a stale copy.
+    Settings-like keys (dne, draft, sig, reply, order) are last-write-wins so edits still work."""
+    out = {**cur, **new}
+    seen, log = set(), []
+    for e in sorted((new.get("log") or []) + (cur.get("log") or []), key=lambda e: -(e.get("ts") or 0)):
+        if isinstance(e, dict) and log_key(e) not in seen:
+            seen.add(log_key(e)); log.append(e)
+    out["log"] = log[:3000]
+    out["sent"] = {**(cur.get("sent") or {}), **(new.get("sent") or {})}
+    out["refs"] = dict(list({**(cur.get("refs") or {}), **(new.get("refs") or {})}.items())[-500:])
+    out["read"] = list(dict.fromkeys((cur.get("read") or []) + (new.get("read") or [])))[-5000:]
+    return out
+
+
 def public_row(r):
     return {"id": r["id"], "label": r["label"], "provider": r["provider"], "cap": r["cap"], **(r.get("public") or {})}
 
@@ -165,13 +185,18 @@ def handle(body, user):
                                              "limit": "500", "select": "id,account_id,type,contact,subject,email_id,at,created_at"})
         return {"events": rows or []}
 
-    if action == "save_state":
-        state = {k: v for k, v in (body.get("state") or {}).items() if k in STATE_KEYS}
+    if action in ("save_state", "clear_log"):
+        incoming = {k: v for k, v in (body.get("state") or {}).items() if k in STATE_KEYS}
+        cur = (db("GET", "scrapeer_state", {"user_id": f"eq.{user['id']}", "select": "data"}) or [{}])[0].get("data") or {}
+        if action == "clear_log":  # the only way history gets removed
+            state = {**cur, "log": [], "sent": {}}
+        else:
+            state = merge_state(cur, incoming)
         if len(json.dumps(state)) > 3_500_000:
             raise Bad("Your saved data is too large — clear the sent log.")
         db("POST", "scrapeer_state?on_conflict=user_id", body={"user_id": user["id"], "data": state, "updated_at": datetime.now(timezone.utc).isoformat()},
            prefer="return=minimal,resolution=merge-duplicates")
-        return {"ok": True}
+        return {"ok": True, "log": state.get("log", []), "sent": state.get("sent", {}), "read": state.get("read", []), "refs": state.get("refs", {})}
 
     raise Bad("Unknown action.")
 

@@ -357,9 +357,12 @@ const store = {get: (k, d) => SYNCED[k] ? (state[SYNCED[k]] ?? d) : local.get(k,
                set(k, v) { if (!SYNCED[k]) return local.set(k, v); state[SYNCED[k]] = v; clearTimeout(saveTimer); saveTimer = setTimeout(saveState, 2000); }};
 async function saveState() {
   clearTimeout(saveTimer); if (!signedIn) return;
-  // ponytail: whole-state upsert, last write wins across devices; per-row tables if two people share one login
+  // the server MERGES history from every tab/device and sends back the combined result, so a tab that was
+  // open for hours can't wipe newer history, and this tab catches up with what other tabs sent
   const d = await post("/api/me", {action: "save_state", state: {...state, log: (state.log || []).slice(0, 3000)}}, 2);
-  if (d.error) console.warn("save failed:", d.error);
+  if (d.error) return console.warn("save failed:", d.error);
+  for (const k of ["log", "sent", "read", "refs"]) if (d[k]) state[k] = d[k];
+  if (d.log) { log = d.log; renderLog(); renderAccounts(); }
 }
 document.addEventListener("visibilitychange", () => { if (document.hidden && saveTimer) saveState(); });
 const csvQ = v => '"' + String(v ?? "").replace(/"/g, '""') + '"';
@@ -728,9 +731,11 @@ function renderLog() {
     `<tr><td colspan="3" class="empty">Nothing sent yet.</td></tr>`;
 }
 $("log-csv").onclick = () => download("scrapeer_sent_" + today() + ".csv", log, ["when", "email", "status", "via", "note"]);
-$("log-clear").onclick = () => {
+$("log-clear").onclick = async () => {
   if (!confirm("Clear the log AND forget who was already emailed? They could be emailed again.")) return;
-  log = []; store.set("scrapeer-log", []); store.set("scrapeer-sent", {}); renderLog(); parseRecips();
+  const d = await post("/api/me", {action: "clear_log"}, 1);
+  if (d.error) return alert(d.error);
+  log = []; state.log = []; state.sent = {}; renderLog(); parseRecips();
 };
 
 function checkReady(r) {
