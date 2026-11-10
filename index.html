@@ -115,15 +115,30 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
 <main class="wrap" id="send" hidden>
   <div class="col">
     <div class="card">
-      <h2>1. Your email account</h2>
-      <div class="field"><label for="acc-user">Email address</label><input type="email" id="acc-user" placeholder="you@gmail.com" autocomplete="username"></div>
-      <div class="field"><label for="acc-pass">App password</label><input type="password" id="acc-pass" placeholder="16-letter app password" autocomplete="current-password">
-        <p class="hint">Not your normal password. Gmail: turn on 2-step verification, then <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">create an app password</a>.</p></div>
+      <h2>1. Send with</h2>
+      <div class="field"><label for="acc-provider">Sending method</label>
+        <select id="acc-provider" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:var(--bg);color:var(--ink);font:14px system-ui,sans-serif">
+          <option value="resend">Resend — your own domain</option>
+          <option value="smtp">Email account — Gmail, Outlook, Google Workspace…</option>
+        </select></div>
+      <div id="resend-fields">
+        <div class="field"><label for="acc-key">Resend API key</label><input type="password" id="acc-key" placeholder="re_…" autocomplete="off">
+          <p class="hint"><a href="https://resend.com/api-keys" target="_blank" rel="noopener">Create a key</a> and <a href="https://resend.com/domains" target="_blank" rel="noopener">verify your domain</a> first.</p></div>
+        <div class="field"><label for="acc-from">From address (on your verified domain)</label><input type="email" id="acc-from" placeholder="jane@yourdomain.com"></div>
+        <div class="field"><label for="acc-replyto">Replies go to</label><input type="email" id="acc-replyto" placeholder="your real inbox, e.g. jane@gmail.com">
+          <p class="hint">Resend only sends — replies need a real inbox to land in.</p></div>
+        <p class="hint" style="color:var(--med)">⚠ Resend is meant for people who asked to hear from you. Its policy bans cold email to scraped lists and it can suspend your account. For cold outreach use "Email account" with a Google Workspace mailbox on a second domain.</p>
+      </div>
+      <div id="smtp-fields">
+        <div class="field"><label for="acc-user">Email address</label><input type="email" id="acc-user" placeholder="you@gmail.com" autocomplete="username"></div>
+        <div class="field"><label for="acc-pass">App password</label><input type="password" id="acc-pass" placeholder="16-letter app password" autocomplete="current-password">
+          <p class="hint">Not your normal password. Gmail / Workspace: turn on 2-step verification, then <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">create an app password</a>.</p></div>
+        <details><summary>Advanced (custom domain email)</summary>
+          <div class="row2"><div class="field"><label for="acc-host">SMTP server</label><input type="text" id="acc-host" placeholder="auto"></div>
+          <div class="field"><label for="acc-port">Port</label><input type="number" id="acc-port" placeholder="587"></div></div>
+        </details>
+      </div>
       <div class="field"><label for="acc-name">Your name (shown as sender)</label><input type="text" id="acc-name" placeholder="Jane Smith"></div>
-      <details><summary>Advanced (custom domain email)</summary>
-        <div class="row2"><div class="field"><label for="acc-host">SMTP server</label><input type="text" id="acc-host" placeholder="auto"></div>
-        <div class="field"><label for="acc-port">Port</label><input type="number" id="acc-port" placeholder="587"></div></div>
-      </details>
       <label class="chk"><input type="checkbox" id="acc-remember"> Remember on this device</label>
       <div class="btns" style="margin-top:12px"><button class="ghost" id="acc-test">Test connection</button></div>
       <div class="msg" id="acc-msg" role="status"></div>
@@ -337,11 +352,15 @@ $("pv-next").onclick = () => { pvIdx = Math.min(recipients.length - 1, pvIdx + 1
 for (const id of ["subject", "body", "footer", "delay", "cap"]) $(id).addEventListener("input", () => { saveDraft(); renderPreview(); });
 
 /* ---------- SEND: account ---------- */
-const ACC = ["user", "pass", "name", "host", "port"];
+const ACC = ["provider", "key", "from", "replyto", "user", "pass", "name", "host", "port"];
 function account() {
-  return {user: $("acc-user").value.trim(), pass: $("acc-pass").value, from_name: $("acc-name").value.trim(),
-          host: $("acc-host").value.trim(), port: Number($("acc-port").value) || 587};
+  return {provider: $("acc-provider").value, api_key: $("acc-key").value.trim(), from: $("acc-from").value.trim(),
+          reply_to: $("acc-replyto").value.trim(), user: $("acc-user").value.trim(), pass: $("acc-pass").value,
+          from_name: $("acc-name").value.trim(), host: $("acc-host").value.trim(), port: Number($("acc-port").value) || 587};
 }
+const myAddress = a => a.provider === "resend" ? (a.reply_to || a.from) : a.user;
+const showProvider = () => { const r = $("acc-provider").value === "resend"; $("resend-fields").hidden = !r; $("smtp-fields").hidden = r; };
+$("acc-provider").addEventListener("change", () => { showProvider(); saveAccount(); setMsg("acc-msg", ""); });
 function saveAccount() {
   const v = Object.fromEntries(ACC.map(k => [k, $("acc-" + k).value]));
   try {
@@ -383,16 +402,16 @@ $("log-clear").onclick = () => {
 
 function checkReady(r) {
   const a = account(), m = compose(r);
-  if (!a.user || !a.pass) return "Fill in your email account first.";
+  if (a.provider === "resend" ? !a.api_key || !a.from : !a.user || !a.pass) return "Fill in step 1 (how to send) first.";
   if (!m.subject || !$("body").value.trim()) return "Write a subject and message first.";
   if (/\{\{/.test(m.subject + m.body)) return "A {{field}} isn't filled in — check the preview.";
   return "";
 }
 $("send-test").onclick = async () => {
-  const a = account(), sample = recipients[pvIdx] || enrich({email: a.user}), problem = checkReady(sample);
+  const a = account(), me = myAddress(a), sample = recipients[pvIdx] || enrich({email: me || "you@example.com"}), problem = checkReady(sample);
   if (problem) return setMsg("send-msg", problem, "err");
-  setMsg("send-msg", "Sending test to " + a.user + "…"); $("send-test").disabled = true;
-  const m = compose(sample), d = await post("/api/send", {account: a, to: a.user, subject: "[TEST] " + m.subject, body: m.body}, 0);
+  setMsg("send-msg", "Sending test to " + me + "…"); $("send-test").disabled = true;
+  const m = compose(sample), d = await post("/api/send", {account: a, to: me, subject: "[TEST] " + m.subject, body: m.body}, 0);
   $("send-test").disabled = false;
   setMsg("send-msg", d.error || "Test sent — check your inbox (and spam folder).", d.error ? "err" : "ok");
 };
@@ -417,7 +436,7 @@ $("send-start").onclick = async () => {
     const m = compose(r), d = await post("/api/send", {account: account(), to: r.email, subject: m.subject, body: m.body}, 1);
     if (d.error) {
       fails++; consecutiveFails++; record(r.email, "failed", d.error);
-      if (/Login refused|connect to|app password/i.test(d.error) || consecutiveFails >= 3) { setMsg("send-msg", "Stopped: " + d.error, "err"); break; }
+      if (/Login refused|connect to|app password|API key|domain/i.test(d.error) || consecutiveFails >= 3) { setMsg("send-msg", "Stopped: " + d.error, "err"); break; }
     } else { sent++; consecutiveFails = 0; record(r.email, "sent"); }
     done++;
     $("st-sent").textContent = sent; $("st-failed").textContent = fails; $("send-fill").style.width = (100 * done / queue.length) + "%";
@@ -443,7 +462,8 @@ function saveDraft() { store.set("scrapeer-draft", {recips: $("recips").value, s
   let acc = null;
   try { acc = JSON.parse(localStorage.getItem("scrapeer-acc")); if (acc) $("acc-remember").checked = true;
         else acc = JSON.parse(sessionStorage.getItem("scrapeer-acc")); } catch {}
-  if (acc) for (const k of ACC) $("acc-" + k).value = acc[k] || "";
+  if (acc) for (const k of ACC) if (acc[k] != null && acc[k] !== "") $("acc-" + k).value = acc[k];
+  showProvider();
   parseRecips(); renderLog();
   let tab = "find"; try { tab = localStorage.getItem("scrapeer-tab") || "find"; } catch {}
   showTab(tab);

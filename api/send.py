@@ -1,4 +1,4 @@
-"""POST /api/send — send ONE email through the user's own mailbox (SMTP + app password).
+"""POST /api/send — send ONE email via Resend (own domain, account.provider="resend") or the user's own mailbox (SMTP + app password).
 
 {"account": {"user": "me@gmail.com", "pass": "app password", "from_name": "Me", "host": "", "port": 587},
  "action": "verify"}                                   -> just log in, to test the account
@@ -11,6 +11,8 @@ import os
 import smtplib
 import ssl
 import sys
+import urllib.error
+import urllib.request
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid
 from http.server import BaseHTTPRequestHandler
@@ -60,8 +62,64 @@ def connect(acct):
     return server, user
 
 
+def resend_api(key, method, path, payload=None):
+    req = urllib.request.Request("https://api.resend.com" + path, method=method,
+                                 data=json.dumps(payload).encode() if payload is not None else None,
+                                 headers={"Authorization": "Bearer " + key, "Content-Type": "application/json",
+                                          "User-Agent": "scrapeer/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.status, json.load(r)
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.load(e)
+        except Exception:
+            return e.code, {}
+    except OSError:
+        raise Bad("Couldn't reach Resend. Try again.")
+
+
+def send_resend(body):
+    acct = body.get("account") or {}
+    key, sender = str(acct.get("api_key", "")).strip(), str(acct.get("from", "")).strip().lower()
+    reply_to = str(acct.get("reply_to", "")).strip().lower()
+    if not key.startswith("re_") or not EMAIL.fullmatch(sender):
+        raise Bad("Enter your Resend API key (starts with re_) and a From address on your domain.")
+    if reply_to and not EMAIL.fullmatch(reply_to):
+        raise Bad("The 'Replies go to' address isn't valid.")
+    domain = sender.split("@")[1]
+    if body.get("action") == "verify":
+        code, data = resend_api(key, "GET", "/domains")
+        if code in (401, 403) and data.get("name") == "restricted_api_key":
+            return {"ok": True, "message": "Key works (sending-only key, so the domain can't be checked — send a test)."}
+        if code != 200:
+            raise Bad("Resend refused the API key." if code in (401, 403) else f"Resend error: {data.get('message', code)}")
+        status = {d.get("name"): d.get("status") for d in data.get("data", [])}
+        if status.get(domain) != "verified":
+            raise Bad(f"{domain} is not verified in Resend" + (f" (status: {status[domain]})." if domain in status else " — add it under Domains."))
+        return {"ok": True, "message": f"Resend connected — {domain} is verified."}
+    to = str(body.get("to", "")).strip().lower()
+    if not EMAIL.fullmatch(to):
+        raise Bad("Bad recipient address.")
+    subject, text = one_line(body.get("subject"), 300), str(body.get("body", ""))[:20000]
+    if not subject or not text.strip():
+        raise Bad("Subject and message can't be empty.")
+    unsub = reply_to or sender
+    payload = {"from": formataddr((one_line(acct.get("from_name"), 80), sender)), "to": [to], "subject": subject,
+               "text": text, "headers": {"List-Unsubscribe": f"<mailto:{unsub}?subject=unsubscribe>"}}
+    if reply_to:
+        payload["reply_to"] = reply_to
+    code, data = resend_api(key, "POST", "/emails", payload)
+    if code != 200:
+        msg = data.get("message") or f"HTTP {code}"
+        raise Bad(("Resend refused the API key: " if code in (401, 403) else "Resend: ") + str(msg)[:200])
+    return {"ok": True, "id": data.get("id")}
+
+
 def send(body):
     acct = body.get("account") or {}
+    if acct.get("provider") == "resend":
+        return send_resend(body)
     server, user = connect(acct)
     try:
         if body.get("action") == "verify":
