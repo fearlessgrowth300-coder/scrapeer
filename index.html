@@ -147,12 +147,12 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
           <div class="field"><label for="acc-port">Port</label><input type="number" id="acc-port" placeholder="587"></div></div>
         </details>
       </div>
-      <div class="field"><label for="acc-from">From address</label><input type="email" id="acc-from" placeholder="jane@yourdomain.com"></div>
+      <div class="field"><label for="acc-name">Your name</label><input type="text" id="acc-name" placeholder="Jane Smith">
+        <p class="hint">People see this as the sender, e.g. <b id="from-preview">Jane Smith &lt;jane@yourdomain.com&gt;</b></p></div>
+      <div class="field"><label for="acc-from">From address</label><input type="email" id="acc-from" placeholder="jane@yourdomain.com">
+        <p class="hint">Filled in from your name — change the part before @ to anything you like.</p></div>
       <div class="field"><label for="acc-replyto">Replies go to</label><input type="email" id="acc-replyto" placeholder="your real inbox, e.g. jane@gmail.com"></div>
-      <div class="row2">
-        <div class="field"><label for="acc-name">Your name</label><input type="text" id="acc-name" placeholder="Jane Smith"></div>
-        <div class="field"><label for="acc-cap">Daily limit</label><input type="number" id="acc-cap" min="1"></div>
-      </div>
+      <div class="field"><label for="acc-cap">Daily limit</label><input type="number" id="acc-cap" min="1"></div>
       <label class="chk"><input type="checkbox" id="acc-remember" checked> Remember on this device</label>
       <div class="btns" style="margin-top:12px"><button class="ghost" id="acc-test">Test connection</button><button class="primary" id="acc-add">+ Add to my accounts</button></div>
       <div class="msg" id="acc-msg" role="status"></div>
@@ -406,7 +406,9 @@ async function domainStep(action, quiet) {
   renderDNS(d);
   if (d.status === "verified") {
     clearInterval(autoCheck);
-    if (!$("acc-from").value.trim().endsWith("@" + domain)) { $("acc-from").value = "hello@" + domain; saveAccount(); }
+    const from = $("acc-from").value.trim();
+    if (!from.endsWith("@" + domain) || from === "hello@" + domain) { $("acc-from").value = nameLocal() + "@" + domain; saveAccount(); }
+    updateFromPreview();
     setMsg("dom-msg", `✓ ${domain} is verified — you're ready to send.`, "ok");
   } else {
     setMsg("dom-msg", d.status === "failed" ? "Resend couldn't find the records. Double-check each one, then check again."
@@ -414,6 +416,22 @@ async function domainStep(action, quiet) {
     if (!autoCheck) { autoChecks = 0; autoCheck = setInterval(() => { if (++autoChecks > 30) clearInterval(autoCheck); else domainStep("check", true); }, 60000); }
   }
 }
+// "Harper Hodson" -> "harper": the From address uses your first name instead of hello@
+const nameLocal = () => ($("acc-name").value.trim().split(/\s+/)[0] || "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]/g, "") || "hello";
+function updateFromPreview() {
+  const from = $("acc-from").value.trim() || ($("acc-user").value.includes("@") ? $("acc-user").value.trim() : "you@yourdomain.com");
+  $("from-preview").textContent = `${$("acc-name").value.trim() || "Your Name"} <${from}>`;
+}
+$("acc-name").addEventListener("input", () => {
+  // keep the From address following your name until you edit it yourself
+  const from = $("acc-from").value.trim(), at = from.indexOf("@"), domain = at > 0 ? from.slice(at + 1) : cleanDomain($("acc-domain").value);
+  if (domain && $("acc-provider").value !== "smtp" && (!from || from.slice(0, at) === $("acc-from").dataset.auto || from.startsWith("hello@"))) {
+    $("acc-from").value = nameLocal() + "@" + domain; saveAccount();
+  }
+  $("acc-from").dataset.auto = nameLocal();
+  updateFromPreview();
+});
+$("acc-from").addEventListener("input", updateFromPreview);
 $("dom-connect").onclick = () => domainStep("connect");
 $("dom-check").onclick = () => domainStep("check");
 const PROV = {
@@ -603,6 +621,7 @@ function saveDraft() { store.set("scrapeer-draft", {recips: $("recips").value, s
         else acc = JSON.parse(sessionStorage.getItem("scrapeer-acc")); } catch {}
   if (acc) for (const k of ACC) if (acc[k] != null && acc[k] !== "") $("acc-" + k).value = acc[k];
   showProvider();
+  $("acc-from").dataset.auto = nameLocal(); updateFromPreview();
   if ($("acc-provider").value === "resend" && $("acc-key").value && $("acc-domain").value) domainStep("connect", true);
   parseRecips(); renderLog(); renderAccounts();
   let tab = "find"; try { tab = localStorage.getItem("scrapeer-tab") || "find"; } catch {}
