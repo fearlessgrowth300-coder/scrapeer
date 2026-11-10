@@ -72,6 +72,8 @@ def brevo_hook(acct, url):
         return "needs_key"
     h = {"api-key": key, "accept": "application/json", "content-type": "application/json"}
     code, data = _http("GET", "https://api.brevo.com/v3/webhooks?type=transactional", h)
+    if code == 400 and "does not exist" in str((data or {}).get("message", "")).lower():
+        code, data = 200, {"webhooks": []}  # Brevo answers 400 "Webhook record does not exist" for an empty list
     if code != 200:
         return brevo_reason(code, data)
     if any(w.get("url") == url for w in (data or {}).get("webhooks", [])):
