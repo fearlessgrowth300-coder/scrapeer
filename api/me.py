@@ -149,7 +149,7 @@ def handle(body, user):
     if action == "events":
         since = str(body.get("since") or "1970-01-01T00:00:00Z")[:40]
         rows = db("GET", "scrapeer_events", {"user_id": f"eq.{user['id']}", "created_at": f"gt.{since}", "order": "created_at.asc",
-                                             "limit": "500", "select": "id,type,contact,subject,email_id,at,created_at"})
+                                             "limit": "500", "select": "id,account_id,type,contact,subject,email_id,at,created_at"})
         return {"events": rows or []}
 
     if action == "save_state":

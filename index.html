@@ -601,7 +601,9 @@ let accounts = [];
 const sentTodayVia = label => log.filter(l => l.date === today() && l.status === "sent" && l.via === label).length;
 function renderAccounts() {
   const pool = sendingPool(), next = pool.find(a => sentTodayVia(a.label) < a.cap);
-  $("acct-list").innerHTML = pool.map((a, i) => `<tr><td class="email">${i + 1}. ${esc(a.label)}${a === next ? ' <span class="pill sent">in use</span>' : sentTodayVia(a.label) >= a.cap ? ' <span class="pill low">full today</span>' : ""}</td>
+  const live = a => a.provider === "smtp" ? "" : hookStatus[a.label] === "ok" ? ' <span class="pill sent" title="Ticks, Reading now and pop-ups are connected">live ✓</span>'
+    : hookStatus[a.label] ? `<div class="hint" style="margin:2px 0 0;color:var(--err)">Live ticks off: ${esc(hookStatus[a.label])}</div>` : "";
+  $("acct-list").innerHTML = pool.map((a, i) => `<tr><td class="email">${i + 1}. ${esc(a.label)}${a === next ? ' <span class="pill sent">in use</span>' : sentTodayVia(a.label) >= a.cap ? ' <span class="pill low">full today</span>' : ""}${live(a)}</td>
     <td>${sentTodayVia(a.label)} / ${a.cap}</td><td style="white-space:nowrap">${i ? `<button class="ghost" type="button" data-up="${esc(a.id)}" aria-label="Use earlier" title="Use this one earlier">↑</button> ` : ""}<button class="ghost" type="button" data-rm="${esc(a.id)}" aria-label="Remove">✕</button></td></tr>`).join("")
     || `<tr><td colspan="3" class="empty" style="padding:14px">No accounts added yet.</td></tr>`;
   const total = pool.reduce((s, a) => s + a.cap, 0);
@@ -783,7 +785,7 @@ $("send-start").onclick = async () => {
   parseRecips();
 };
 
-/* ---------- INBOX: WhatsApp/Spike-style conversations, read live from your Resend account(s) ---------- */
+/* ---------- INBOX: WhatsApp/Spike-style chats — one chat per (sending account, person) ---------- */
 const resendAccounts = () => accounts.filter(a => a.provider === "resend");
 const addrOf = s => (String(s || "").match(/[^\s<>"]+@[^\s<>"]+/) || [""])[0].toLowerCase();
 const nameOf = s => { const m = String(s || "").match(/^\s*"?([^"<]+?)"?\s*</); return m ? m[1].trim() : addrOf(s); };
@@ -798,7 +800,9 @@ const TICK = {sent: "✓", queued: "✓", scheduled: "🕓", delivered: "✓✓"
   complained: '<span class="bad">⚠ Marked spam</span>', failed: '<span class="bad">⚠ Failed</span>'};
 const STATUS_WORD = {delivered: "Delivered", opened: "Opened", clicked: "Clicked a link", bounced: "Bounced",
   complained: "Marked as spam", failed: "Failed", delivery_delayed: "Delayed", sent: "Sent", queued: "Sent"};
-let convos = new Map(), activeContact = null, bodies = {}, pending = [], inboxTimer = null, inboxBusy = false;
+const chatKey = (accId, email) => accId + "|" + email;
+const serviceOf = c => (accounts.find(a => a.id === c.account_id)?.label || c.via || "").split(" · ")[0] || "Email";
+let convos = new Map(), activeKey = null, bodies = {}, pending = [], inboxTimer = null, inboxBusy = false;
 const readSet = () => new Set(store.get("scrapeer-read", []));
 const unreadTotal = () => [...convos.values()].reduce((n, c) => n + c.unread, 0);
 
@@ -812,21 +816,33 @@ async function loadInbox(quiet) {
     : [{emails: []}, {replies: []}];
   inboxBusy = false;
   if (sent.error || inbox.error) return setMsg("ib-msg", sent.error || inbox.error, "err");
-  setMsg("ib-msg", resendAccounts().length ? "" : "Tip: add a Resend account in the Send tab to get delivery ticks and replies here.");
+  setMsg("ib-msg", resendAccounts().length ? "" : "Tip: add a Resend account in the Send tab to get replies here.");
   const mine = new Set(accounts.map(a => addrOf(a.from)).concat(replyInfo()?.address || []).filter(Boolean));
-  const map = new Map(), convo = (email, name) => {
-    if (!map.has(email)) map.set(email, {email, name: email, msgs: []});
-    const c = map.get(email); if (name && name !== email) c.name = name; return c;
+  const map = new Map(), convo = (accId, email, via) => {
+    const key = chatKey(accId, email);
+    if (!map.has(key)) map.set(key, {key, email, account_id: accId, via, name: email, msgs: []});
+    return map.get(key);
   };
   for (const e of sent.emails || []) { const to = addrOf(e.to); if (to && !mine.has(to))
-    convo(to).msgs.push({id: e.id, dir: "out", key: e.key, account_id: e.account_id, subject: e.subject, at: tsOf(e.created_at), status: e.last_event}); }
-  for (const r of inbox.replies || []) { const from = addrOf(r.from); if (from && !mine.has(from))
-    convo(from, nameOf(r.from)).msgs.push({id: r.id, dir: "in", key: r.key, account_id: r.account_id, subject: r.subject, at: tsOf(r.created_at), message_id: r.message_id}); }
-  // sent through Brevo/Mailjet/Gmail: those services give no history back, so show what we saved when sending
-  log.forEach((l, i) => { if ((l.status === "sent" || l.status === "test") && l.via && !l.via.startsWith("Resend"))
-    convo(l.email).msgs.push({id: "log-" + i, dir: "out", subject: l.subj || "", text: l.snip || "(message text wasn't saved)", at: l.ts || Date.parse(l.date) || 0, status: "other", via: l.via}); });
-  // just-sent replies that Resend hasn't listed yet
-  for (const p of pending) { const c = convo(p.to); if (!c.msgs.some(m => m.dir === "out" && m.key != null && Math.abs(m.at - p.msg.at) < 180000)) c.msgs.push(p.msg); }
+    convo(e.account_id, to).msgs.push({id: e.id, dir: "out", key: e.key, account_id: e.account_id, subject: e.subject, at: tsOf(e.created_at), status: e.last_event}); }
+  // Brevo/Mailjet/Gmail give no history back: use what we saved when sending
+  log.forEach((l, i) => { if ((l.status === "sent" || l.status === "test") && l.via && !l.via.startsWith("Resend")) {
+    const acc = accounts.find(a => a.label === l.via);
+    convo(acc ? acc.id : "via:" + l.via, l.email, l.via).msgs.push({id: "log-" + i, dir: "out", subject: l.subj || "", text: l.snip || "(message text wasn't saved)",
+      at: l.ts || Date.parse(l.date) || 0, status: "other", via: l.via});
+  } });
+  for (const p of pending) { const c = map.get(p.key) || convo(p.account_id, p.to);
+    if (!c.msgs.some(m => m.dir === "out" && m !== p.msg && Math.abs(m.at - p.msg.at) < 180000)) c.msgs.push(p.msg); }
+  // every reply comes in through Resend: put it in the chat of the account that last emailed that person before it
+  for (const r of inbox.replies || []) {
+    const from = addrOf(r.from); if (!from || mine.has(from)) continue;
+    const at = tsOf(r.created_at);
+    let best = null, bestAt = -1;
+    for (const c of map.values()) if (c.email === from) for (const m of c.msgs) if (m.dir === "out" && m.at <= at && m.at > bestAt) { best = c; bestAt = m.at; }
+    const c = best || convo(r.account_id, from);
+    c.name = nameOf(r.from) || c.name;
+    c.msgs.push({id: r.id, dir: "in", key: r.key, account_id: r.account_id, subject: r.subject, at, message_id: r.message_id});
+  }
   const read = readSet();
   for (const c of map.values()) {
     c.msgs.sort((a, b) => a.at - b.at); c.last = c.msgs[c.msgs.length - 1];
@@ -834,60 +850,60 @@ async function loadInbox(quiet) {
   }
   convos = map;
   $("ib-badge").textContent = unreadTotal() ? `(${unreadTotal()})` : "";
-  const outs = [...map.values()].flatMap(c => c.msgs.filter(m => m.dir === "out" && !String(m.id).startsWith("tmp")).map(m => ({...m, status: liveStatus(c.email, m)})));
-  const count = k => outs.filter(m => k.includes(m.status)).length;
+  const outs = [...map.values()].flatMap(c => { const st = statuses(c); return c.msgs.filter(m => m.dir === "out" && !String(m.id).startsWith("tmp")).map(m => st.get(m)); });
+  const count = k => outs.filter(s => k.includes(s)).length;
   $("ib-stats").innerHTML = [["Sent", outs.length], ["Delivered", count(["delivered", "opened", "clicked"])], ["Opened", count(["opened", "clicked"])],
     ["Replied", [...map.values()].filter(c => c.msgs.some(m => m.dir === "in")).length], ["Bounced/spam", count(["bounced", "complained", "failed"])]]
     .map(([l, v]) => `<span><b>${v}</b> ${l}</span>`).join("");
   renderConvos();
-  if (activeContact && convos.has(activeContact)) { renderThread(); fetchBodies(); }
+  if (activeKey && convos.has(activeKey)) { renderThread(); fetchBodies(); }
 }
 $("ib-refresh").onclick = () => loadInbox();
 $("ib-search").oninput = renderConvos;
 
 function renderConvos() {
   const q = $("ib-search").value.trim().toLowerCase();
-  const list = [...convos.values()].filter(c => !q || c.email.includes(q) || c.name.toLowerCase().includes(q)).sort((a, b) => b.last.at - a.last.at);
+  const list = [...convos.values()].filter(c => !q || c.email.includes(q) || c.name.toLowerCase().includes(q) || serviceOf(c).toLowerCase().includes(q))
+    .sort((a, b) => b.last.at - a.last.at);
   $("ib-convos").innerHTML = list.map(c => {
-    const l = c.last, prev = bodies[l.id] || l.text || l.subject || (l.dir === "in" ? "New reply" : "");
-    return `<button type="button" class="convo${c.unread ? " has-unread" : ""}" data-email="${esc(c.email)}" aria-current="${c.email === activeContact}">
-      <div class="avatar${isReading(c.email) ? " live" : ""}" aria-hidden="true">${esc(c.name[0].toUpperCase())}</div>
-      <div class="convo-body"><div class="convo-top"><span class="convo-name">${esc(c.name)}</span><span class="convo-time">${l.at ? listTime(l.at) : ""}</span></div>
-      <div class="convo-bottom"><span class="convo-prev">${isReading(c.email) ? '<span class="reading">👀 Reading now</span> · ' : ""}${l.dir === "out" ? (TICK[liveStatus(c.email, l)] || "✓") + " " : ""}${esc(String(prev).split("\n")[0])}</span>${c.unread ? `<span class="unread">${c.unread}</span>` : ""}</div></div></button>`;
+    const l = c.last, prev = bodies[l.id] || l.text || l.subject || (l.dir === "in" ? "New reply" : ""), st = statuses(c);
+    return `<button type="button" class="convo${c.unread ? " has-unread" : ""}" data-key="${esc(c.key)}" aria-current="${c.key === activeKey}">
+      <div class="avatar${isReading(c) ? " live" : ""}" aria-hidden="true">${esc(c.name[0].toUpperCase())}</div>
+      <div class="convo-body"><div class="convo-top"><span class="convo-name">${esc(c.name)} <span class="hint" style="margin:0;font-weight:400">· ${esc(serviceOf(c))}</span></span><span class="convo-time">${l.at ? listTime(l.at) : ""}</span></div>
+      <div class="convo-bottom"><span class="convo-prev">${isReading(c) ? '<span class="reading">👀 Reading now</span> · ' : ""}${l.dir === "out" ? (TICK[st.get(l)] || "✓") + " " : ""}${esc(String(prev).split("\n")[0])}</span>${c.unread ? `<span class="unread">${c.unread}</span>` : ""}</div></div></button>`;
   }).join("") || `<p class="empty" style="padding:30px 12px">${q ? "No matches." : "No conversations yet — people you email show up here."}</p>`;
 }
-$("ib-convos").onclick = e => { const b = e.target.closest("[data-email]"); if (b) openConvo(b.dataset.email); };
+$("ib-convos").onclick = e => { const b = e.target.closest("[data-key]"); if (b) openConvo(b.dataset.key); };
 
-function openConvo(email) {
-  activeContact = email; $("chat").classList.add("open");
+function openConvo(key) {
+  if (!convos.has(key)) return;
+  activeKey = key; $("chat").classList.add("open");
   for (const id of ["chat-head", "msgs", "composer"]) $(id).hidden = false;
   $("chat-empty").hidden = true;
-  const c = convos.get(email), s = readSet();
+  const c = convos.get(key), s = readSet();
   c.msgs.filter(m => m.dir === "in").forEach(m => s.add(m.id)); store.set("scrapeer-read", [...s].slice(-5000)); c.unread = 0;
   $("ib-badge").textContent = unreadTotal() ? `(${unreadTotal()})` : "";
   renderConvos(); renderThread(true); fetchBodies(); $("compose").focus();
 }
-$("chat-back").onclick = () => { activeContact = null; $("chat").classList.remove("open"); renderConvos(); };
+$("chat-back").onclick = () => { activeKey = null; $("chat").classList.remove("open"); renderConvos(); };
 
 function renderThread(scroll) {
-  const c = convos.get(activeContact); if (!c) return;
-  const box = $("msgs"), atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
-  $("chat-avatar").textContent = c.name[0].toUpperCase(); $("chat-name").textContent = c.name;
-  $("chat-avatar").classList.toggle("live", !!isReading(c.email));
+  const c = convos.get(activeKey); if (!c) return;
+  const box = $("msgs"), atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60, st = statuses(c);
+  $("chat-avatar").textContent = c.name[0].toUpperCase(); $("chat-name").textContent = `${c.name} · via ${serviceOf(c)}`;
+  $("chat-avatar").classList.toggle("live", !!isReading(c));
   const lastOut = [...c.msgs].reverse().find(m => m.dir === "out"), lastIn = [...c.msgs].reverse().find(m => m.dir === "in");
-  $("chat-sub").textContent = [c.name !== c.email ? c.email : "", lastIn && (!lastOut || lastIn.at > lastOut.at) ? "Replied " + listTime(lastIn.at)
-    : lastOut ? (liveStatus(c.email, lastOut) === "other" ? "Sent via " + lastOut.via.split(" · ")[0] : STATUS_WORD[liveStatus(c.email, lastOut)] || "Sent") + " · " + listTime(lastOut.at) : ""]
-    .filter(Boolean).join(" · ");
-  if (lastSeen[c.email]) $("chat-sub").innerHTML = (isReading(c.email) ? '<span class="reading">👀 Reading now</span>' : esc(seenText(c.email))) + " · " + esc($("chat-sub").textContent);
+  const status = lastIn && (!lastOut || lastIn.at > lastOut.at) ? "Replied " + listTime(lastIn.at)
+    : lastOut ? (STATUS_WORD[st.get(lastOut)] || "Sent") + " · " + listTime(lastOut.at) : "";
+  $("chat-sub").innerHTML = [c.name !== c.email ? esc(c.email) : "", isReading(c) ? '<span class="reading">👀 Reading now</span>' : esc(seenText(c)), esc(status)].filter(Boolean).join(" · ");
   let html = "", lastDay = "", lastSubj = null;
   for (const m of c.msgs) {
     const day = m.at ? dayLabel(m.at) : "";
     if (day && day !== lastDay) { html += `<div class="day">${esc(day)}</div>`; lastDay = day; }
     const subj = m.subject && plainSubj(m.subject) !== lastSubj ? `<div class="subj">${esc(m.subject)}</div>` : "";
     lastSubj = plainSubj(m.subject);
-    const text = bodies[m.id] ?? m.text ?? "…";
-    const st = liveStatus(c.email, m), via = m.via ? ` <span style="opacity:.85">· ${esc(m.via.split(" · ")[0])}</span>` : "";
-    const ticks = m.dir !== "out" ? "" : " " + (st === "other" ? "✓" : TICK[st] || "✓") + via;
+    const text = bodies[m.id] ?? m.text ?? "…", s = st.get(m);
+    const ticks = m.dir !== "out" ? "" : " " + (s === "other" ? "✓" : TICK[s] || "✓");
     html += `<div class="bubble ${m.dir}">${subj}<div class="text">${esc(text)}</div><div class="meta">${m.at ? hhmm(m.at) : ""}${ticks}</div></div>`;
   }
   box.innerHTML = html;
@@ -895,99 +911,122 @@ function renderThread(scroll) {
 }
 
 async function fetchBodies() {
-  const c = convos.get(activeContact); if (!c) return;
+  const c = convos.get(activeKey); if (!c) return;
   const items = c.msgs.filter(m => m.key != null && !(m.id in bodies)).slice(-40).map(m => ({id: m.id, key: m.key, dir: m.dir}));
   if (!items.length) return;
   const d = await post("/api/track", {action: "bodies", items}, 1);
-  if (d.bodies) { Object.assign(bodies, d.bodies); if (activeContact === c.email) renderThread(); renderConvos(); }
+  if (d.bodies) { Object.assign(bodies, d.bodies); if (activeKey === c.key) renderThread(); renderConvos(); }
 }
 
 $("compose").addEventListener("input", e => { const t = e.target; t.style.height = "44px"; t.style.height = Math.min(t.scrollHeight, 160) + "px"; });
 $("compose").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("composer").requestSubmit(); } });
 $("composer").onsubmit = async e => {
   e.preventDefault();
-  const c = convos.get(activeContact), text = $("compose").value.trim(); if (!c || !text) return;
-  const lastIn = [...c.msgs].reverse().find(m => m.dir === "in"), lastRes = [...c.msgs].reverse().find(m => m.account_id);
-  const lastOut = [...c.msgs].reverse().find(m => m.dir === "out" && (m.via || m.account_id));
-  const acc = accounts.find(a => lastOut && (a.label === lastOut.via || a.id === lastOut.account_id))
-    || accounts.find(a => a.id === (lastIn || lastRes)?.account_id) || resendAccounts()[0] || accounts[0];
-  if (!acc) return setMsg("ib-msg", "Add a sending account in the Send tab first.", "err");
+  const c = convos.get(activeKey), text = $("compose").value.trim(); if (!c || !text) return;
+  // each chat belongs to one account: answer from that same account
+  const acc = accounts.find(a => a.id === c.account_id) || accounts.find(a => a.label === c.via);
+  if (!acc) return setMsg("ib-msg", "The account this chat was sent from was removed — add it again in the Send tab.", "err");
+  const lastIn = [...c.msgs].reverse().find(m => m.dir === "in");
   const base = [...c.msgs].reverse().find(m => m.subject)?.subject || "Following up";
   const subject = /^re:/i.test(base) ? base : "Re: " + base;
-  const msg = {id: "tmp-" + Date.now(), dir: "out", subject, text, at: Date.now(), status: "queued"};
+  const msg = {id: "tmp-" + Date.now(), dir: "out", subject, text, at: Date.now(), status: "queued", via: acc.provider === "resend" ? undefined : acc.label};
   c.msgs.push(msg); c.last = msg; $("compose").value = ""; $("compose").style.height = "44px"; renderThread(true); renderConvos();
   const d = await post("/api/send", {account_id: acc.id, to: c.email, subject, body: text, in_reply_to: lastIn?.message_id, reply_to: replyAddr()}, 1);
   if (d.error) { msg.status = "failed"; renderThread(); return setMsg("ib-msg", d.error, "err"); }
   record(c.email, "sent", "reply", acc.label, subject, text);
-  msg.status = "sent"; if (d.id) bodies[d.id] = text;
-  if (acc.provider === "resend") { pending.push({to: c.email, msg}); pending = pending.slice(-20); }
+  msg.status = acc.provider === "resend" ? "sent" : "other"; if (d.id) { bodies[d.id] = text; msg.email_id = d.id; }
+  if (acc.provider === "resend") { pending.push({key: c.key, account_id: acc.id, to: c.email, msg}); pending = pending.slice(-20); }
   renderThread(); setTimeout(() => loadInbox(true), 4000);
 };
 
-/* ---------- LIVE: "Reading now", "Last seen", pop-ups (from signed Resend webhooks) ---------- */
-// Approximate like WhatsApp's blue ticks: Apple Mail can "open" emails by itself, and apps that block images hide opens.
-const READING_MS = 3 * 60 * 1000;
-let lastSeen = {}, eventsBy = {}, eventsSince = null, liveTimer = null, hooksChecked = false;
-// ticks for Mailjet/Brevo/Gmail messages come from the webhook events (Resend messages carry their own status)
+/* ---------- LIVE: ticks, "Reading now", "Last seen", pop-ups (from signed/tokened webhooks) ---------- */
+// Approximate like WhatsApp's blue ticks. Gmail/Outlook scanners load the tracking image the moment an email
+// arrives, so an "open" within 45 s of delivery is treated as a machine, not a person.
+const READING_MS = 3 * 60 * 1000, MACHINE_OPEN_MS = 45 * 1000;
 const RANK = {"email.delivered": 1, "email.opened": 2, "email.clicked": 2, "email.bounced": 3, "email.complained": 3};
-function liveStatus(email, m) {
-  if (m.dir !== "out" || m.status !== "other") return m.status;
-  const best = (eventsBy[email] || []).filter(e => e.at >= m.at - 120000).sort((a, b) => RANK[b.type] - RANK[a.type])[0];
-  return best ? best.type.replace("email.", "") : "other";
+let lastSeen = {}, eventsBy = {}, deliveredAt = {}, hookStatus = {}, eventsSince = null, liveTimer = null, hooksChecked = false;
+
+// status of every outgoing message in a chat: Resend events match by email id; Mailjet/Brevo events go to the
+// latest message sent before them in that chat. Machine opens count as "delivered".
+function statuses(c) {
+  const out = new Map(), outs = c.msgs.filter(m => m.dir === "out"), byMsg = new Map();
+  for (const e of eventsBy[c.key] || []) {
+    const owner = (e.email_id && outs.find(m => m.id === e.email_id || m.email_id === e.email_id))
+      || [...outs].reverse().find(m => !m.key && m.at <= e.at + 5000);
+    if (!owner) continue;
+    const t = e.type === "email.opened" && !e.human ? "email.delivered" : e.type;
+    const cur = byMsg.get(owner); if (!cur || RANK[t] > RANK[cur]) byMsg.set(owner, t);
+  }
+  for (const m of outs) {
+    const ev = byMsg.get(m);
+    let s = ev ? ev.replace("email.", "") : m.status;
+    // Resend's own last_event can't tell scanner opens apart: trust our filtered events once we have any for this message
+    if (!ev && (s === "opened" || s === "clicked") && (eventsBy[c.key] || []).some(e => e.email_id === m.id)) s = "delivered";
+    out.set(m, s);
+  }
+  return out;
 }
 const ago = t => { const s = Math.max(0, (Date.now() - t) / 1000);
   return s < 60 ? "just now" : s < 3600 ? Math.round(s / 60) + " min ago" : s < 86400 ? Math.round(s / 3600) + " h ago" : dayLabel(t); };
-const isReading = email => lastSeen[email] && Date.now() - lastSeen[email] < READING_MS;
-const seenText = email => !lastSeen[email] ? "" : isReading(email) ? "👀 Reading now" : "Last seen " + ago(lastSeen[email]);
+const isReading = c => lastSeen[c.key] && Date.now() - lastSeen[c.key] < READING_MS;
+const seenText = c => !lastSeen[c.key] ? "" : isReading(c) ? "👀 Reading now" : "Last seen " + ago(lastSeen[c.key]);
 
-function toast(title, sub, email) {
+function toast(title, sub, key) {
   const t = Object.assign(document.createElement("button"), {type: "button", className: "toast"});
-  t.innerHTML = `<div class="avatar" aria-hidden="true" style="width:34px;height:34px">${esc((email || "?")[0].toUpperCase())}</div><div><b>${esc(title)}</b><div class="hint">${esc(sub)}</div></div>`;
-  t.onclick = () => { t.remove(); if (email) { showTab("inbox"); setTimeout(() => convos.has(email) && openConvo(email), 600); } };
+  const who = (key || "?").split("|").pop();
+  t.innerHTML = `<div class="avatar" aria-hidden="true" style="width:34px;height:34px">${esc(who[0].toUpperCase())}</div><div><b>${esc(title)}</b><div class="hint">${esc(sub)}</div></div>`;
+  t.onclick = () => { t.remove(); if (key) { showTab("inbox"); setTimeout(() => openConvo(convos.has(key) ? key
+    : [...convos.values()].filter(c => c.email === who).sort((a, b) => b.last.at - a.last.at)[0]?.key), 800); } };
   $("toasts").append(t); setTimeout(() => t.remove(), 12000);
   if (document.hidden && "Notification" in window && Notification.permission === "granted") {
-    const n = new Notification(title, {body: sub, tag: (email || "") + title}); n.onclick = () => { window.focus(); t.onclick(); n.close(); };
+    const n = new Notification(title, {body: sub, tag: (key || "") + title}); n.onclick = () => { window.focus(); t.onclick(); n.close(); };
   }
 }
 
 async function pollEvents() {
   if (!signedIn) return;
-  if (!hooksChecked) {  // register the live webhook on each Resend account (once per session; no-op if already done)
+  if (!hooksChecked) {  // connect live events on each account (once per session; no-op when already connected)
     hooksChecked = true;
     const h = await post("/api/me", {action: "ensure_hooks"}, 1);
-    for (const x of h.hooks || []) {
-      if (x.error === "needs_key") toast(`Add your Brevo API key for ticks & pop-ups`, `${x.label}: remove it and add it again with the Brevo API key filled in.`);
-      else if (!x.ok) toast(`Live ticks not set up for ${x.label}`, x.error);
-      else if (x.warning) console.warn(x.label, x.warning);
-    }
+    for (const x of h.hooks || []) hookStatus[x.label] = x.ok ? "ok" : x.error === "needs_key" ? "Add the Brevo API key (remove + re-add this account)" : x.error || "not connected";
+    renderAccounts();
   }
   const first = eventsSince === null;
   const d = await post("/api/me", {action: "events", since: eventsSince || new Date(Date.now() - 7 * 864e5).toISOString()}, 0);
   if (d.error || !d.events) return;
   let inboxChanged = false;
-  for (const e of d.events) {
-    eventsSince = e.created_at;
-    const at = tsOf(e.at) || tsOf(e.created_at), who = e.contact || "", subj = e.subject ? `“${e.subject}”` : "your email";
-    if (e.type === "email.opened" || e.type === "email.clicked") lastSeen[who] = Math.max(lastSeen[who] || 0, at);
-    (eventsBy[who] = eventsBy[who] || []).push({type: e.type, at});
+  if (d.events.length) eventsSince = d.events[d.events.length - 1].created_at;
+  // process in the order things happened (a provider can report "opened" before "delivered")
+  for (const e of [...d.events].sort((a, b) => (tsOf(a.at) || tsOf(a.created_at)) - (tsOf(b.at) || tsOf(b.created_at)))) {
+    const at = tsOf(e.at) || tsOf(e.created_at), who = e.contact || "", key = chatKey(e.account_id, who);
+    const subj = e.subject ? `“${e.subject}”` : "your email";
+    if (e.type === "email.delivered") {
+      deliveredAt[key] = at;
+      // an "open" we already counted that was really within seconds of this delivery → it was a scanner
+      for (const o of eventsBy[key] || []) if (o.type === "email.opened" && o.human && o.at >= at && o.at - at < MACHINE_OPEN_MS) o.human = false;
+      lastSeen[key] = Math.max(0, ...(eventsBy[key] || []).filter(o => o.human && (o.type === "email.opened" || o.type === "email.clicked")).map(o => o.at)) || undefined;
+    }
+    const human = e.type === "email.clicked" || (e.type === "email.opened" && !(deliveredAt[key] && at >= deliveredAt[key] && at - deliveredAt[key] < MACHINE_OPEN_MS));
+    if ((e.type === "email.opened" || e.type === "email.clicked") && human) lastSeen[key] = Math.max(lastSeen[key] || 0, at);
+    (eventsBy[key] = eventsBy[key] || []).push({type: e.type, at, email_id: e.email_id, human});
     if (e.type === "email.received") inboxChanged = true;
     if (first) continue;  // history: no pop-ups for the past
-    if (e.type === "email.opened") toast(`👀 ${who} opened your email`, `${subj} · follow up while they're reading`, who);
-    else if (e.type === "email.clicked") toast(`🔗 ${who} clicked a link`, subj, who);
-    else if (e.type === "email.received") toast(`💬 New reply from ${who}`, subj, who);
-    else if (e.type === "email.bounced") toast(`⚠ Email to ${who} bounced`, "That address doesn't work — it won't be emailed again.", who);
-    else if (e.type === "email.complained") toast(`⚠ ${who} marked you as spam`, "Added to do-not-email.", who);
+    if (e.type === "email.opened" && human) toast(`👀 ${who} opened your email`, `${subj} · follow up while they're reading`, key);
+    else if (e.type === "email.clicked") toast(`🔗 ${who} clicked a link`, subj, key);
+    else if (e.type === "email.received") toast(`💬 New reply from ${who}`, subj, key);
+    else if (e.type === "email.bounced") toast(`⚠ Email to ${who} bounced`, "That address doesn't work — it won't be emailed again.", key);
+    else if (e.type === "email.complained") toast(`⚠ ${who} marked you as spam`, "Added to do-not-email.", key);
     if (e.type === "email.bounced" || e.type === "email.complained") {  // protect the account: never email them again
       const list = $("dne").value.trim(); if (!list.toLowerCase().includes(who)) { $("dne").value = (list ? list + "\n" : "") + who; store.set("scrapeer-dne", $("dne").value); }
     }
   }
   if (!first && d.events.length && !$("inbox").hidden) inboxChanged ? loadInbox(true) : (renderConvos(), renderThread());
-  else if (d.events.length) { renderConvos(); if (activeContact) renderThread(); }
+  else if (d.events.length) { renderConvos(); if (activeKey) renderThread(); }
 }
 function startLive() {
   clearInterval(liveTimer); pollEvents();
-  // every 10s while you're looking, every 45s in the background (pop-ups/desktop alerts still arrive)
-  let n = 0; liveTimer = setInterval(() => { n++; if (!document.hidden || n % 4 === 0) pollEvents(); if (!$("inbox").hidden) { renderConvos(); if (activeContact) renderThread(); } }, 10000);
+  // every 10s while you're looking, every 40s in the background (pop-ups/desktop alerts still arrive)
+  let n = 0; liveTimer = setInterval(() => { n++; if (!document.hidden || n % 4 === 0) pollEvents(); if (!$("inbox").hidden) { renderConvos(); if (activeKey) renderThread(); } }, 10000);
 }
 $("alerts").onclick = async () => {
   if (!("Notification" in window)) return toast("Desktop alerts aren't supported in this browser", "Pop-ups inside the app still work.");
