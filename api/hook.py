@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(__file__))
-from _auth import Bad, db, decrypt  # noqa: E402
+from _auth import Bad, db, decrypt, hook_token  # noqa: E402
 
 KEEP = {"email.delivered", "email.opened", "email.clicked", "email.bounced", "email.complained", "email.received"}
 UUID = re.compile(r"[0-9a-f-]{36}")
@@ -38,12 +38,51 @@ def addr(s):
     return m.group(0).lower() if m else ""
 
 
-def handle(account_id, headers, raw):
+MAILJET = {"sent": "email.delivered", "open": "email.opened", "click": "email.clicked", "bounce": "email.bounced",
+           "blocked": "email.bounced", "spam": "email.complained"}
+BREVO = {"delivered": "email.delivered", "opened": "email.opened", "uniqueOpened": "email.opened", "click": "email.clicked",
+         "hardBounce": "email.bounced", "blocked": "email.bounced", "invalid": "email.bounced", "spam": "email.complained"}
+
+
+def iso(ts):
+    try:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(ts)))
+    except (TypeError, ValueError):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def other_events(provider, raw):
+    """Mailjet/Brevo payload (one event or a list) -> rows like the Resend ones."""
+    data = json.loads(raw or b"null")
+    out = []
+    for ev in data if isinstance(data, list) else [data]:
+        if not isinstance(ev, dict):
+            continue
+        if provider == "mailjet":
+            kind, ts = MAILJET.get(ev.get("event")), ev.get("time")
+            eid = f"mj-{ev.get('MessageID')}-{ev.get('event')}-{ts}"
+        else:
+            kind, ts = BREVO.get(ev.get("event")), ev.get("ts_event") or ev.get("ts_epoch") or ev.get("ts")
+            ts = int(ts) // 1000 if ts and int(ts) > 10**11 else ts  # ts_epoch is in milliseconds
+            eid = f"br-{ev.get('message-id') or ev.get('id')}-{ev.get('event')}-{ts}"
+        if kind and ev.get("email"):
+            out.append({"event_id": eid[:200], "type": kind, "contact": addr(ev["email"]), "subject": str(ev.get("subject") or "")[:300], "at": iso(ts)})
+    return out
+
+
+def handle(account_id, headers, raw, token=""):
     if not UUID.fullmatch(account_id or ""):
         raise Bad("unknown account", 404)
-    rows = db("GET", "scrapeer_accounts", {"id": f"eq.{account_id}", "select": "id,user_id,secret"})
+    rows = db("GET", "scrapeer_accounts", {"id": f"eq.{account_id}", "select": "id,user_id,provider,secret"})
     if not rows:
         raise Bad("unknown account", 404)
+    if rows[0]["provider"] in ("mailjet", "brevo"):
+        if not hmac.compare_digest(token or "", hook_token(account_id)):
+            raise Bad("bad token", 401)
+        for e in other_events(rows[0]["provider"], raw):
+            db("POST", "scrapeer_events?on_conflict=event_id", prefer="return=minimal,resolution=ignore-duplicates",
+               body={**e, "user_id": rows[0]["user_id"], "account_id": account_id})
+        return
     acct = decrypt(rows[0]["secret"])
     if not svix_ok(acct.get("hook_secret", ""), headers, raw):
         raise Bad("bad signature", 401)
@@ -62,7 +101,8 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 262144))
-            handle((parse_qs(urlparse(self.path).query).get("a") or [""])[0], self.headers, raw)
+            q = parse_qs(urlparse(self.path).query)
+            handle((q.get("a") or [""])[0], self.headers, raw, (q.get("t") or [""])[0])
             code = 200
         except Bad as e:
             code = e.status
@@ -84,6 +124,11 @@ def _selfcheck():
     assert not svix_ok("whsec_" + base64.b64encode(b"x" * 32).decode(), good, body)   # wrong secret
     assert not svix_ok("", good, body)                                                # no secret saved
     assert addr("Bob <BOB@x.com>") == "bob@x.com"
+    mj = other_events("mailjet", b'[{"event":"open","time":1794340000,"MessageID":7,"email":"Bob@X.com"},{"event":"unsub","email":"a@b.c"}]')
+    assert mj == [{"event_id": "mj-7-open-1794340000", "type": "email.opened", "contact": "bob@x.com", "subject": "", "at": "2026-11-10T19:46:40Z"}], mj
+    br = other_events("brevo", b'{"event":"hardBounce","email":"x@y.com","message-id":"<m1>","ts_event":1794340000,"subject":"Hi"}')
+    assert br[0]["type"] == "email.bounced" and br[0]["subject"] == "Hi" and br[0]["at"] == "2026-11-10T19:46:40Z"
+    assert other_events("brevo", b'{"event":"opened","email":"x@y.com","ts_epoch":1794340000123}')[0]["at"] == "2026-11-10T19:46:40Z"
     print("hook selfcheck ok")
 
 

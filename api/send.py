@@ -115,9 +115,7 @@ def send_resend(body):
     if not subject or not text.strip():
         raise Bad("Subject and message can't be empty.")
     unsub = reply_to or sender
-    # plain-looking HTML twin of the text: Resend needs HTML to add its open-tracking pixel
-    html = "<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.5\">" + \
-        htmllib.escape(text).replace("\n", "<br>") + "</div>"
+    html = html_twin(text)
     payload = {"from": formataddr((one_line(acct.get("from_name"), 80), sender)), "to": [to], "subject": subject,
                "text": text, "html": html, "headers": {"List-Unsubscribe": f"<mailto:{unsub}?subject=unsubscribe>"}}
     in_reply_to = one_line(body.get("in_reply_to"), 300)
@@ -130,6 +128,12 @@ def send_resend(body):
         msg = data.get("message") or f"HTTP {code}"
         raise Bad(("Resend refused the API key: " if code in (401, 403) else "Resend: ") + str(msg)[:200])
     return {"ok": True, "id": data.get("id")}
+
+
+def html_twin(text):
+    """Plain-looking HTML copy of the text: every service needs HTML to add its open-tracking pixel."""
+    return ("<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.5\">"
+            + htmllib.escape(text).replace("\n", "<br>") + "</div>")
 
 
 def send(body):
@@ -159,7 +163,10 @@ def send(body):
         if EMAIL.fullmatch(reply_to):
             msg["Reply-To"] = reply_to
         msg["List-Unsubscribe"] = f"<mailto:{reply_to if EMAIL.fullmatch(reply_to) else user}?subject=unsubscribe>"
+        if acct.get("provider") == "mailjet":
+            msg["X-Mailjet-TrackOpen"] = "1"  # Brevo tracks opens on HTML mail by default
         msg.set_content(text)
+        msg.add_alternative(html_twin(text), subtype="html")
         try:
             server.send_message(msg)
         except smtplib.SMTPRecipientsRefused:

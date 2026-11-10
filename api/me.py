@@ -14,7 +14,8 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 
 sys.path.insert(0, os.path.dirname(__file__))
-from _auth import Bad, db, decrypt, encrypt, serve  # noqa: E402
+import base64  # noqa: E402
+from _auth import Bad, _http, db, decrypt, encrypt, hook_token, serve  # noqa: E402
 
 NAMES = {"brevo": "Brevo", "mailjet": "Mailjet", "resend": "Resend", "smtp": "Email"}
 FIELDS = ("provider", "api_key", "from", "reply_to", "user", "pass", "from_name", "host", "port", "cap", "domain")
@@ -24,14 +25,72 @@ APP_URL = os.environ.get("APP_URL", "https://scrapeer-brown.vercel.app").rstrip(
 HOOK_EVENTS = ["email.bounced", "email.clicked", "email.complained", "email.delivered", "email.opened", "email.received"]
 
 
+MJ_EVENTS = ["sent", "open", "click", "bounce", "spam", "blocked"]
+BREVO_EVENTS = ["delivered", "opened", "uniqueOpened", "click", "hardBounce", "spam", "blocked", "invalid"]
+
+
+def mailjet_hook(acct, url):
+    """Mailjet: one callback URL per event type, set with the same API key + secret used for SMTP."""
+    auth = {"Authorization": "Basic " + base64.b64encode(f"{acct.get('user', '')}:{acct.get('pass', '')}".encode()).decode()}
+    code, data = _http("GET", "https://api.mailjet.com/v3/REST/eventcallbackurl?Limit=100", auth)
+    if code != 200:
+        return "Mailjet refused the API key/secret"
+    have = {d.get("EventType"): d for d in (data or {}).get("Data", [])}
+    busy = []
+    for et in MJ_EVENTS:
+        cur = have.get(et)
+        if cur and cur.get("Url") == url:
+            continue
+        if cur and APP_URL not in str(cur.get("Url")):
+            busy.append(et)  # already used by another app: leave it alone
+            continue
+        if cur:
+            code, _ = _http("PUT", f"https://api.mailjet.com/v3/REST/eventcallbackurl/{cur['ID']}", {**auth, "Content-Type": "application/json"}, {"Url": url, "Status": "alive"})
+        else:
+            code, _ = _http("POST", "https://api.mailjet.com/v3/REST/eventcallbackurl", {**auth, "Content-Type": "application/json"},
+                            {"EventType": et, "Url": url, "Status": "alive"})
+        if code >= 400:
+            return f"Mailjet didn't accept the '{et}' webhook ({code})"
+    return f"Mailjet already sends {', '.join(busy)} events to another app" if busy else ""
+
+
+def brevo_hook(acct, url):
+    """Brevo: needs a Brevo *API* key (the SMTP key can't manage webhooks)."""
+    key = str(acct.get("api_key") or "")
+    if not key:
+        return "needs_key"
+    h = {"api-key": key, "accept": "application/json", "content-type": "application/json"}
+    code, data = _http("GET", "https://api.brevo.com/v3/webhooks?type=transactional", h)
+    if code != 200:
+        return "Brevo refused the API key"
+    if any(w.get("url") == url for w in (data or {}).get("webhooks", [])):
+        return ""
+    code, data = _http("POST", "https://api.brevo.com/v3/webhooks", h,
+                       {"url": url, "description": "Scrapeer ticks & pop-ups", "events": BREVO_EVENTS, "type": "transactional"})
+    return "" if code < 400 else "Brevo didn't accept the webhook: " + str((data or {}).get("message") or code)
+
+
 def ensure_hooks(user):
-    """One webhook per saved Resend account → /api/hook?a=<id>; its signing secret is kept inside the encrypted blob."""
+    """Live events for every saved account → /api/hook?a=<id>. Resend: signed (secret kept in the encrypted blob);
+    Mailjet/Brevo: unsigned, so their URL carries a per-account secret token."""
     from send import resend_api  # noqa: E402
     out = []
-    for r in db("GET", "scrapeer_accounts", {"user_id": f"eq.{user['id']}", "provider": "eq.resend", "select": "id,label,secret"}) or []:
+    for r in db("GET", "scrapeer_accounts", {"user_id": f"eq.{user['id']}", "provider": "in.(resend,mailjet,brevo)",
+                                             "select": "id,label,provider,secret"}) or []:
         acct = decrypt(r["secret"])
-        if acct.get("hook_secret"):
+        if acct.get("hook_secret") or acct.get("hook_ok"):
             out.append({"label": r["label"], "ok": True})
+            continue
+        if r["provider"] in ("mailjet", "brevo"):
+            url = f"{APP_URL}/api/hook?a={r['id']}&t={hook_token(r['id'])}"
+            err = (mailjet_hook if r["provider"] == "mailjet" else brevo_hook)(acct, url)
+            if err and not err.endswith("to another app"):
+                out.append({"label": r["label"], "ok": False, "error": err})
+                continue
+            acct["hook_ok"] = True
+            db("PATCH", "scrapeer_accounts", {"id": f"eq.{r['id']}", "user_id": f"eq.{user['id']}"},
+               body={"secret": encrypt(acct)}, prefer="return=minimal")
+            out.append({"label": r["label"], "ok": True, "new": True, **({"warning": err} if err else {})})
             continue
         key, endpoint = acct.get("api_key", ""), f"{APP_URL}/api/hook?a={r['id']}"
         code, data = resend_api(key, "GET", "/webhooks")

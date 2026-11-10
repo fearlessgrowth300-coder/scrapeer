@@ -73,6 +73,13 @@ def _key():
     return raw
 
 
+def hook_token(account_id):
+    """Secret token in the Mailjet/Brevo webhook URL (they don't sign requests like Resend/Svix does)."""
+    import hashlib
+    import hmac
+    return hmac.new(_key(), b"scrapeer-hook:" + str(account_id).encode(), hashlib.sha256).hexdigest()[:40]
+
+
 def encrypt(obj):
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     nonce = os.urandom(12)

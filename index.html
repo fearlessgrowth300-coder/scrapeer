@@ -212,6 +212,8 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
         <p class="hint" id="smtp-help" style="margin:0 0 10px"></p>
         <div class="field"><label for="acc-user" id="lbl-user">Email address</label><input type="text" id="acc-user" placeholder="you@gmail.com" autocomplete="username"></div>
         <div class="field"><label for="acc-pass" id="lbl-pass">App password</label><input type="password" id="acc-pass" autocomplete="current-password"></div>
+        <div class="field" id="bkey-wrap" hidden><label for="acc-bkey">Brevo API key — for ✓✓ ticks, "Reading now" and pop-ups</label><input type="password" id="acc-bkey" placeholder="xkeysib-…" autocomplete="off">
+          <p class="hint">Brevo → Settings → SMTP &amp; API → <b>API Keys</b> → Generate a new API key. (Different from the SMTP key above.) Optional — sending works without it.</p></div>
         <details id="smtp-adv"><summary>Advanced (custom SMTP server)</summary>
           <div class="row2"><div class="field"><label for="acc-host">SMTP server</label><input type="text" id="acc-host" placeholder="auto"></div>
           <div class="field"><label for="acc-port">Port</label><input type="number" id="acc-port" placeholder="587"></div></div>
@@ -567,7 +569,7 @@ $("dom-connect").onclick = () => domainStep("connect");
 $("dom-check").onclick = () => domainStep("check");
 const PROV = {
   brevo: {name: "Brevo", cap: 300, user: "SMTP login", userPh: "xxxxxx@smtp-brevo.com", pass: "SMTP key",
-    help: `Free <a href="https://www.brevo.com" target="_blank" rel="noopener">Brevo</a> account → Settings → <b>SMTP & API</b> → copy the SMTP login and generate an SMTP key. Then <b>Senders, Domains</b> → add & authenticate your domain.`},
+    help: `Free <a href="https://www.brevo.com" target="_blank" rel="noopener">Brevo</a> account → Settings → <b>SMTP & API</b> → copy the SMTP login and generate an SMTP key. Then <b>Senders, Domains</b> → add & authenticate your domain. Add the optional Brevo <b>API key</b> below for ticks & pop-ups.`},
   mailjet: {name: "Mailjet", cap: 200, user: "API key", userPh: "Mailjet API key", pass: "Secret key",
     help: `Free <a href="https://www.mailjet.com" target="_blank" rel="noopener">Mailjet</a> account → Account settings → <b>API keys</b> (API key + Secret key). Then <b>Senders & domains</b> → add & authenticate your domain.`},
   resend: {name: "Resend", cap: 100},
@@ -576,7 +578,7 @@ const PROV = {
 };
 function account() {
   const provider = $("acc-provider").value;
-  return {provider, api_key: $("acc-key").value.trim(), from: $("acc-from").value.trim(),
+  return {provider, api_key: provider === "brevo" ? $("acc-bkey").value.trim() : $("acc-key").value.trim(), from: $("acc-from").value.trim(),
           reply_to: $("acc-replyto").value.trim(), user: $("acc-user").value.trim(), pass: $("acc-pass").value,
           from_name: $("acc-name").value.trim(), host: $("acc-host").value.trim(), port: Number($("acc-port").value) || 587,
           cap: Number($("acc-cap").value) || PROV[provider].cap, domain: provider === "resend" ? cleanDomain($("acc-domain").value) : ""};
@@ -587,7 +589,7 @@ function showProvider() {
   const p = $("acc-provider").value, meta = PROV[p], r = p === "resend";
   $("resend-fields").hidden = !r; $("smtp-fields").hidden = r;
   if (!r) { $("lbl-user").textContent = meta.user; $("acc-user").placeholder = meta.userPh; $("lbl-pass").textContent = meta.pass;
-            $("smtp-help").innerHTML = meta.help; $("smtp-adv").hidden = p !== "smtp"; }
+            $("smtp-help").innerHTML = meta.help; $("smtp-adv").hidden = p !== "smtp"; $("bkey-wrap").hidden = p !== "brevo"; }
   $("acc-cap").placeholder = meta.cap;
   $("acc-from").placeholder = p === "smtp" ? "same as email address (optional)" : "jane@yourdomain.com";
 }
@@ -630,7 +632,7 @@ $("acc-add").onclick = async () => {
   const d = await addAccount(a);
   $("acc-add").disabled = false;
   if (d.error) return setMsg("acc-msg", "Not added: " + d.error, "err");
-  renderAccounts(); $("acc-pass").value = ""; hooksChecked = false; pollEvents();  // the secret now lives only (encrypted) on the server
+  renderAccounts(); $("acc-pass").value = ""; $("acc-bkey").value = ""; hooksChecked = false; pollEvents();  // the secret now lives only (encrypted) on the server
   if (a.provider !== "resend") $("acc-key").value = "";
   setMsg("acc-msg", `✓ Added ${d.account.label} (saved encrypted to your account). Add another service to send more per day.`, "ok");
 };
@@ -832,7 +834,7 @@ async function loadInbox(quiet) {
   }
   convos = map;
   $("ib-badge").textContent = unreadTotal() ? `(${unreadTotal()})` : "";
-  const outs = [...map.values()].flatMap(c => c.msgs.filter(m => m.dir === "out" && m.key != null));
+  const outs = [...map.values()].flatMap(c => c.msgs.filter(m => m.dir === "out" && !String(m.id).startsWith("tmp")).map(m => ({...m, status: liveStatus(c.email, m)})));
   const count = k => outs.filter(m => k.includes(m.status)).length;
   $("ib-stats").innerHTML = [["Sent", outs.length], ["Delivered", count(["delivered", "opened", "clicked"])], ["Opened", count(["opened", "clicked"])],
     ["Replied", [...map.values()].filter(c => c.msgs.some(m => m.dir === "in")).length], ["Bounced/spam", count(["bounced", "complained", "failed"])]]
@@ -851,7 +853,7 @@ function renderConvos() {
     return `<button type="button" class="convo${c.unread ? " has-unread" : ""}" data-email="${esc(c.email)}" aria-current="${c.email === activeContact}">
       <div class="avatar${isReading(c.email) ? " live" : ""}" aria-hidden="true">${esc(c.name[0].toUpperCase())}</div>
       <div class="convo-body"><div class="convo-top"><span class="convo-name">${esc(c.name)}</span><span class="convo-time">${l.at ? listTime(l.at) : ""}</span></div>
-      <div class="convo-bottom"><span class="convo-prev">${isReading(c.email) ? '<span class="reading">👀 Reading now</span> · ' : ""}${l.dir === "out" ? (l.status === "other" ? "✓" : TICK[l.status] || "✓") + " " : ""}${esc(String(prev).split("\n")[0])}</span>${c.unread ? `<span class="unread">${c.unread}</span>` : ""}</div></div></button>`;
+      <div class="convo-bottom"><span class="convo-prev">${isReading(c.email) ? '<span class="reading">👀 Reading now</span> · ' : ""}${l.dir === "out" ? (TICK[liveStatus(c.email, l)] || "✓") + " " : ""}${esc(String(prev).split("\n")[0])}</span>${c.unread ? `<span class="unread">${c.unread}</span>` : ""}</div></div></button>`;
   }).join("") || `<p class="empty" style="padding:30px 12px">${q ? "No matches." : "No conversations yet — people you email show up here."}</p>`;
 }
 $("ib-convos").onclick = e => { const b = e.target.closest("[data-email]"); if (b) openConvo(b.dataset.email); };
@@ -874,7 +876,7 @@ function renderThread(scroll) {
   $("chat-avatar").classList.toggle("live", !!isReading(c.email));
   const lastOut = [...c.msgs].reverse().find(m => m.dir === "out"), lastIn = [...c.msgs].reverse().find(m => m.dir === "in");
   $("chat-sub").textContent = [c.name !== c.email ? c.email : "", lastIn && (!lastOut || lastIn.at > lastOut.at) ? "Replied " + listTime(lastIn.at)
-    : lastOut ? (lastOut.status === "other" ? "Sent via " + lastOut.via.split(" · ")[0] : STATUS_WORD[lastOut.status] || "Sent") + " · " + listTime(lastOut.at) : ""]
+    : lastOut ? (liveStatus(c.email, lastOut) === "other" ? "Sent via " + lastOut.via.split(" · ")[0] : STATUS_WORD[liveStatus(c.email, lastOut)] || "Sent") + " · " + listTime(lastOut.at) : ""]
     .filter(Boolean).join(" · ");
   if (lastSeen[c.email]) $("chat-sub").innerHTML = (isReading(c.email) ? '<span class="reading">👀 Reading now</span>' : esc(seenText(c.email))) + " · " + esc($("chat-sub").textContent);
   let html = "", lastDay = "", lastSubj = null;
@@ -884,7 +886,8 @@ function renderThread(scroll) {
     const subj = m.subject && plainSubj(m.subject) !== lastSubj ? `<div class="subj">${esc(m.subject)}</div>` : "";
     lastSubj = plainSubj(m.subject);
     const text = bodies[m.id] ?? m.text ?? "…";
-    const ticks = m.dir !== "out" ? "" : " " + (m.status === "other" ? `✓ <span style="opacity:.85">via ${esc(m.via.split(" · ")[0])}</span>` : TICK[m.status] || "✓");
+    const st = liveStatus(c.email, m), via = m.via ? ` <span style="opacity:.85">· ${esc(m.via.split(" · ")[0])}</span>` : "";
+    const ticks = m.dir !== "out" ? "" : " " + (st === "other" ? "✓" : TICK[st] || "✓") + via;
     html += `<div class="bubble ${m.dir}">${subj}<div class="text">${esc(text)}</div><div class="meta">${m.at ? hhmm(m.at) : ""}${ticks}</div></div>`;
   }
   box.innerHTML = html;
@@ -924,7 +927,14 @@ $("composer").onsubmit = async e => {
 /* ---------- LIVE: "Reading now", "Last seen", pop-ups (from signed Resend webhooks) ---------- */
 // Approximate like WhatsApp's blue ticks: Apple Mail can "open" emails by itself, and apps that block images hide opens.
 const READING_MS = 3 * 60 * 1000;
-let lastSeen = {}, eventsSince = null, liveTimer = null, hooksChecked = false;
+let lastSeen = {}, eventsBy = {}, eventsSince = null, liveTimer = null, hooksChecked = false;
+// ticks for Mailjet/Brevo/Gmail messages come from the webhook events (Resend messages carry their own status)
+const RANK = {"email.delivered": 1, "email.opened": 2, "email.clicked": 2, "email.bounced": 3, "email.complained": 3};
+function liveStatus(email, m) {
+  if (m.dir !== "out" || m.status !== "other") return m.status;
+  const best = (eventsBy[email] || []).filter(e => e.at >= m.at - 120000).sort((a, b) => RANK[b.type] - RANK[a.type])[0];
+  return best ? best.type.replace("email.", "") : "other";
+}
 const ago = t => { const s = Math.max(0, (Date.now() - t) / 1000);
   return s < 60 ? "just now" : s < 3600 ? Math.round(s / 60) + " min ago" : s < 86400 ? Math.round(s / 3600) + " h ago" : dayLabel(t); };
 const isReading = email => lastSeen[email] && Date.now() - lastSeen[email] < READING_MS;
@@ -945,7 +955,11 @@ async function pollEvents() {
   if (!hooksChecked) {  // register the live webhook on each Resend account (once per session; no-op if already done)
     hooksChecked = true;
     const h = await post("/api/me", {action: "ensure_hooks"}, 1);
-    for (const x of h.hooks || []) if (!x.ok) console.warn("live updates not set up for", x.label, x.error);
+    for (const x of h.hooks || []) {
+      if (x.error === "needs_key") toast(`Add your Brevo API key for ticks & pop-ups`, `${x.label}: remove it and add it again with the Brevo API key filled in.`);
+      else if (!x.ok) toast(`Live ticks not set up for ${x.label}`, x.error);
+      else if (x.warning) console.warn(x.label, x.warning);
+    }
   }
   const first = eventsSince === null;
   const d = await post("/api/me", {action: "events", since: eventsSince || new Date(Date.now() - 7 * 864e5).toISOString()}, 0);
@@ -955,6 +969,7 @@ async function pollEvents() {
     eventsSince = e.created_at;
     const at = tsOf(e.at) || tsOf(e.created_at), who = e.contact || "", subj = e.subject ? `“${e.subject}”` : "your email";
     if (e.type === "email.opened" || e.type === "email.clicked") lastSeen[who] = Math.max(lastSeen[who] || 0, at);
+    (eventsBy[who] = eventsBy[who] || []).push({type: e.type, at});
     if (e.type === "email.received") inboxChanged = true;
     if (first) continue;  // history: no pop-ups for the past
     if (e.type === "email.opened") toast(`👀 ${who} opened your email`, `${subj} · follow up while they're reading`, who);
