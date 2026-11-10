@@ -219,6 +219,16 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
       <div class="msg" id="acc-msg" role="status"></div>
       <div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>Account</th><th>Today</th><th></th></tr></thead><tbody id="acct-list"></tbody></table></div>
       <p class="hint" id="acct-total"></p>
+      <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
+        <h2 style="font-size:15px;margin-bottom:4px">Get every reply in the Inbox chat</h2>
+        <p class="hint" style="margin:0 0 10px">Replies to emails from Resend, Mailjet, Brevo and Gmail all come back to one address and show up in the Inbox tab — like a chat. Needs your Resend account added above.</p>
+        <div class="btns"><button class="ghost" type="button" id="reply-go">Set up replies</button><button class="ghost" type="button" id="reply-check" hidden>I've added it — check now</button></div>
+        <div id="reply-dns" hidden style="margin-top:10px">
+          <p class="hint" style="margin:0 0 8px">Add this record at Hostinger (DNS / Nameservers → DNS records). Click a value to copy it.</p>
+          <div class="tablewrap"><table><thead><tr><th>Type</th><th>Name / Host</th><th>Value</th><th>Status</th></tr></thead><tbody id="reply-rows"></tbody></table></div>
+        </div>
+        <div class="msg" id="reply-msg" role="status"></div>
+      </div>
     </div>
     <div class="card">
       <h2>2. Recipients</h2>
@@ -301,7 +311,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 // Private data (sent log, already-emailed, do-not-email, drafts, read replies) lives in your account on the server;
 // only harmless UI preferences stay in this browser.
-const SYNCED = {"scrapeer-log": "log", "scrapeer-sent": "sent", "scrapeer-dne": "dne", "scrapeer-draft": "draft", "scrapeer-read": "read"};
+const SYNCED = {"scrapeer-log": "log", "scrapeer-sent": "sent", "scrapeer-dne": "dne", "scrapeer-draft": "draft", "scrapeer-read": "read", "scrapeer-reply": "reply"};
 let state = {}, saveTimer = null, sb = null, signedIn = false;
 const local = {get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
@@ -488,9 +498,9 @@ const ACC = ["provider", "key", "domain", "from", "replyto", "user", "pass", "na
 const cleanDomain = s => s.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split(/[\/?#]/)[0];
 const STATUS_CLASS = {verified: "sent", failed: "failed", temporary_failure: "failed"};
 let autoCheck = null, autoChecks = 0;
-function renderDNS(d) {
-  $("dns").hidden = false; $("dns-suffix").textContent = "." + d.name;
-  $("dns-rows").innerHTML = d.records.map(r => {
+function renderDNS(d, rows = "dns-rows") {
+  if (rows === "dns-rows") { $("dns").hidden = false; $("dns-suffix").textContent = "." + d.name; }
+  $(rows).innerHTML = d.records.map(r => {
     const value = String(r.value).replace(/^"(.*)"$/, "$1"), st = r.status || "not_started";
     return `<tr><td>${esc(r.type)}${r.priority != null ? " <span class='hint'>prio " + esc(r.priority) + "</span>" : ""}<div class="hint">${esc(r.record)}</div></td>
       <td><button type="button" class="ghost copyv" data-copy="${esc(r.name)}" title="Copy">${esc(r.name)}</button></td>
@@ -498,7 +508,7 @@ function renderDNS(d) {
       <td><span class="pill ${STATUS_CLASS[st] || "medium"}">${esc(st.replace(/_/g, " "))}</span></td></tr>`;
   }).join("");
 }
-$("dns-rows").onclick = async e => {
+$("dns-rows").onclick = $("reply-rows").onclick = async e => {
   const b = e.target.closest(".copyv"); if (!b) return;
   await navigator.clipboard.writeText(b.dataset.copy); const t = b.textContent; b.textContent = "Copied!"; setTimeout(() => b.textContent = t, 1200);
 };
@@ -620,6 +630,36 @@ $("acc-test").onclick = async () => {
   setMsg("acc-msg", d.error || d.message, d.error ? "err" : "ok");
 };
 
+/* shared reply inbox: reply@reply.<your domain>, received by Resend → shows in the Inbox chat */
+const replyInfo = () => store.get("scrapeer-reply", null);
+const replyAddr = () => (replyInfo()?.verified ? replyInfo().address : "");
+let replyTimer = null, replyChecks = 0;
+function showReplyState() {
+  const r = replyInfo();
+  $("reply-go").textContent = r ? "Show the record again" : "Set up replies";
+  if (r?.verified) setMsg("reply-msg", `✓ Every reply now goes to ${r.address} and shows up in the Inbox chat.`, "ok");
+  else if (r) { $("reply-check").hidden = false; replyStep("reply_check", true); }
+}
+async function replyStep(action, quiet) {
+  const acc = resendAccounts()[0];
+  if (!acc) return setMsg("reply-msg", "First add your Resend account above (Service: Resend → + Add to my accounts).", "err");
+  const domain = acc.domain || addrOf(acc.from).split("@")[1];
+  if (!quiet) setMsg("reply-msg", action === "reply_check" ? "Checking DNS…" : "Setting up reply." + domain + " in Resend…");
+  $("reply-go").disabled = $("reply-check").disabled = true;
+  const d = await post("/api/domain", {account_id: acc.id, domain, action}, 1);
+  $("reply-go").disabled = $("reply-check").disabled = false;
+  if (d.error) { clearInterval(replyTimer); return setMsg("reply-msg", d.error, "err"); }
+  $("reply-dns").hidden = false; $("reply-check").hidden = false; renderDNS(d, "reply-rows");
+  const verified = d.status === "verified";
+  store.set("scrapeer-reply", {address: d.reply_address, domain: d.name, verified});
+  if (verified) { clearInterval(replyTimer); $("reply-check").hidden = true;
+    return setMsg("reply-msg", `✓ Done! Every email (Resend, Mailjet, Brevo, Gmail) now says "reply to ${d.reply_address}", and replies show up in the Inbox chat.`, "ok"); }
+  setMsg("reply-msg", "Waiting for DNS — add the MX record above at Hostinger. Usually a few minutes to an hour; we keep checking while this page is open.");
+  if (!replyTimer) { replyChecks = 0; replyTimer = setInterval(() => { if (++replyChecks > 60) clearInterval(replyTimer); else replyStep("reply_check", true); }, 60000); }
+}
+$("reply-go").onclick = () => replyStep("reply_setup");
+$("reply-check").onclick = () => replyStep("reply_check");
+
 /* ---------- SEND: sending ---------- */
 const sentMap = () => store.get("scrapeer-sent", {});
 let log = [];  // loaded from your account after sign-in
@@ -658,7 +698,7 @@ $("send-test").onclick = async () => {
   for (const a of sendingPool()) {  // one test per account, so you see which ones land in spam
     const me = myAddress(a), sample = recipients[pvIdx] || enrich({email: me});
     setMsg("send-msg", `Sending test via ${a.label} to ${me}…`);
-    const m = compose(sample), d = await post("/api/send", {account_id: a.id, to: me, subject: `[TEST via ${PROV[a.provider]?.name}] ` + m.subject, body: m.body}, 0);
+    const m = compose(sample), d = await post("/api/send", {account_id: a.id, to: me, subject: `[TEST via ${PROV[a.provider]?.name}] ` + m.subject, body: m.body, reply_to: replyAddr()}, 0);
     out.push(d.error ? `✗ ${a.label}: ${d.error}` : `✓ ${a.label}`);
   }
   $("send-test").disabled = false;
@@ -694,7 +734,7 @@ $("send-start").onclick = async () => {
     while ((a = pick())) {  // an account that can't log in is dropped and the same person goes to the next account
       setMsg("send-msg", `Sending to ${r.email} via ${a.label}…`);
       const m = compose(r);
-      d = await post("/api/send", {account_id: a.id, to: r.email, subject: m.subject, body: m.body}, 1);
+      d = await post("/api/send", {account_id: a.id, to: r.email, subject: m.subject, body: m.body, reply_to: replyAddr()}, 1);
       if (d.error && /Login refused|connect to|API key|domain|verified|not allowed|suspend|limit|quota/i.test(d.error)) {
         dead.add(a.label); record(r.email, "failed", "account dropped: " + d.error, a.label); continue;
       }
@@ -750,7 +790,7 @@ async function loadInbox(quiet) {
   inboxBusy = false;
   if (sent.error || inbox.error) return setMsg("ib-msg", sent.error || inbox.error, "err");
   setMsg("ib-msg", resendAccounts().length ? "" : "Tip: add a Resend account in the Send tab to get delivery ticks and replies here.");
-  const mine = new Set(accounts.map(a => addrOf(a.from)).filter(Boolean));
+  const mine = new Set(accounts.map(a => addrOf(a.from)).concat(replyInfo()?.address || []).filter(Boolean));
   const map = new Map(), convo = (email, name) => {
     if (!map.has(email)) map.set(email, {email, name: email, msgs: []});
     const c = map.get(email); if (name && name !== email) c.name = name; return c;
@@ -842,13 +882,15 @@ $("composer").onsubmit = async e => {
   e.preventDefault();
   const c = convos.get(activeContact), text = $("compose").value.trim(); if (!c || !text) return;
   const lastIn = [...c.msgs].reverse().find(m => m.dir === "in"), lastRes = [...c.msgs].reverse().find(m => m.account_id);
-  const acc = accounts.find(a => a.id === (lastIn || lastRes)?.account_id) || resendAccounts()[0] || accounts[0];
+  const lastOut = [...c.msgs].reverse().find(m => m.dir === "out" && (m.via || m.account_id));
+  const acc = accounts.find(a => lastOut && (a.label === lastOut.via || a.id === lastOut.account_id))
+    || accounts.find(a => a.id === (lastIn || lastRes)?.account_id) || resendAccounts()[0] || accounts[0];
   if (!acc) return setMsg("ib-msg", "Add a sending account in the Send tab first.", "err");
   const base = [...c.msgs].reverse().find(m => m.subject)?.subject || "Following up";
   const subject = /^re:/i.test(base) ? base : "Re: " + base;
   const msg = {id: "tmp-" + Date.now(), dir: "out", subject, text, at: Date.now(), status: "queued"};
   c.msgs.push(msg); c.last = msg; $("compose").value = ""; $("compose").style.height = "44px"; renderThread(true); renderConvos();
-  const d = await post("/api/send", {account_id: acc.id, to: c.email, subject, body: text, in_reply_to: lastIn?.message_id}, 1);
+  const d = await post("/api/send", {account_id: acc.id, to: c.email, subject, body: text, in_reply_to: lastIn?.message_id, reply_to: replyAddr()}, 1);
   if (d.error) { msg.status = "failed"; renderThread(); return setMsg("ib-msg", d.error, "err"); }
   record(c.email, "sent", "reply", acc.label, subject, text);
   msg.status = "sent"; if (d.id) bodies[d.id] = text;
@@ -870,6 +912,7 @@ function restoreUI() {
   showProvider();
   $("acc-from").dataset.auto = nameLocal(); updateFromPreview();
   if ($("acc-provider").value === "resend" && $("acc-domain").value) domainStep("connect", true);
+  showReplyState();
   parseRecips(); renderLog(); renderAccounts();
   showTab(local.get("scrapeer-tab", "find") || "find");
 }

@@ -58,12 +58,12 @@ def wanted_settings(domain):
             "capabilities": {"sending": "enabled", "receiving": "enabled" if receive else "disabled"}}, receive
 
 
-def domain_info(key, domain_id, receiving):
+def domain_info(key, domain_id, receiving, dmarc=True):
     d = ok(*resend_api(key, "GET", f"/domains/{domain_id}"))
     records = d.get("records") or []
-    # Resend doesn't create DMARC, but inbox providers want it: suggest the safe monitoring-only policy
-    records.append({"record": "DMARC (recommended)", "type": "TXT", "name": "_dmarc", "value": DMARC,
-                    "status": "verified" if has_dmarc(d["name"]) else "not_started"})
+    if dmarc:  # Resend doesn't create DMARC, but inbox providers want it: suggest the safe monitoring-only policy
+        records.append({"record": "DMARC (recommended)", "type": "TXT", "name": "_dmarc", "value": DMARC,
+                        "status": "verified" if has_dmarc(d["name"]) else "not_started"})
     return {"id": d["id"], "name": d["name"], "status": d.get("status", "not_started"), "records": records,
             "receiving": receiving}
 
@@ -77,6 +77,8 @@ def handle(body, user):
         raise Bad("Paste your Resend API key (it starts with re_).")
     if not DOMAIN.fullmatch(domain):
         raise Bad("Type just the domain, like yourdomain.com")
+    if body.get("action") in ("reply_setup", "reply_check"):
+        return reply_domain(key, domain, body["action"] == "reply_check")
     settings, receive = wanted_settings(domain)
     found = next((d for d in ok(*resend_api(key, "GET", "/domains")).get("data", []) if d.get("name") == domain), None)
     if not found:
@@ -95,6 +97,21 @@ def handle(body, user):
         if body.get("action") == "check":
             ok(*resend_api(key, "POST", f"/domains/{found['id']}/verify", {}))
     return domain_info(key, found["id"], receive)
+
+
+def reply_domain(key, domain, check):
+    """reply.<domain>: a receive-only Resend domain (just one MX record, nothing else on the main domain changes).
+    Every email from every service gets Reply-To reply@reply.<domain>, so all replies land in the Inbox chat."""
+    name = "reply." + domain.removeprefix("reply.")
+    found = next((d for d in ok(*resend_api(key, "GET", "/domains")).get("data", []) if d.get("name") == name), None)
+    if not found:
+        found = ok(*resend_api(key, "POST", "/domains", {"name": name, "capabilities": {"sending": "disabled", "receiving": "enabled"}}))
+    elif check:
+        ok(*resend_api(key, "POST", f"/domains/{found['id']}/verify", {}))
+    info = domain_info(key, found["id"], True, dmarc=False)
+    # the domain is usable for replies once its receiving MX checks out, even if Resend's overall status lags
+    mx_ok = any(r.get("type") == "MX" and r.get("status") == "verified" for r in info["records"])
+    return {**info, "status": "verified" if mx_ok or info["status"] == "verified" else info["status"], "reply_address": "reply@" + name}
 
 
 class handler(BaseHTTPRequestHandler):

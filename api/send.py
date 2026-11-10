@@ -134,6 +134,10 @@ def send_resend(body):
 
 def send(body):
     acct = body.get("account") or {}
+    override = str(body.get("reply_to") or "").strip().lower()
+    if EMAIL.fullmatch(override):  # the user's shared reply inbox wins over each account's own reply-to
+        acct = {**acct, "reply_to": override}
+        body = {**body, "account": acct}
     if acct.get("provider") == "resend":
         return send_resend(body)
     server, user = connect(acct)

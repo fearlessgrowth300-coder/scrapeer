@@ -17,7 +17,7 @@ from _auth import Bad, db, encrypt, serve  # noqa: E402
 NAMES = {"brevo": "Brevo", "mailjet": "Mailjet", "resend": "Resend", "smtp": "Email"}
 FIELDS = ("provider", "api_key", "from", "reply_to", "user", "pass", "from_name", "host", "port", "cap", "domain")
 PUBLIC = ("from", "reply_to", "from_name", "domain")  # safe to send back to the browser
-STATE_KEYS = ("log", "sent", "dne", "draft", "read")
+STATE_KEYS = ("log", "sent", "dne", "draft", "read", "reply")
 
 
 def public_row(r):
