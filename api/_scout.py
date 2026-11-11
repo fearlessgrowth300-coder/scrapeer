@@ -49,7 +49,9 @@ VENDOR_DOMAINS = ("wixpress.com", "sentry.io", "squarespace.com", "shopify.com",
                   "wordpress.org", "w3.org", "schema.org", "jquery.com", "cloudflare.com", "example.com",
                   "example.org", "domain.com", "yourdomain.com", "email.com", "test.com", "mysite.com",
                   "website.com", "company.com", "placeholder.com", "paypal.com", "stripe.com", "mailchimp.com",
-                  "klaviyo.com", "bigcommerce.com", "weebly.com", "webflow.io", "hubspot.com")
+                  "klaviyo.com", "bigcommerce.com", "weebly.com", "webflow.io", "hubspot.com", "yourstore.com",
+                  "store.com", "printify.com", "payolution.com",
+                  "gamil.com", "gmial.com", "gmal.com", "gmail.co", "hotmal.com", "outlok.com")  # typo domains bounce
 PLACEHOLDER_LOCALS = {"name", "email", "you", "your", "yourname", "youremail", "user", "username", "john.doe",
                       "johndoe", "jane.doe", "janedoe", "firstname", "first.last", "firstname.lastname", "someone",
                       "test", "noreply", "no-reply", "donotreply", "do-not-reply", "example"}
@@ -101,6 +103,8 @@ def is_junk(email):
     return (domain.rsplit(".", 1)[-1] in NOT_TLD or "@2x" in email or "@3x" in email
             or local in PLACEHOLDER_LOCALS or base_local(local) in AUTOMATED
             or re.fullmatch(r"[0-9a-f]{16,}", local) is not None
+            or "datenschutz" in domain  # German privacy regulators / outsourced privacy officers
+            or re.search(r"\d[a-z]+\d|[bcdfghjklmnpqrstvwxz]{6,}", domain.split(".")[0]) is not None  # e3x9m5b7q2.asia
             or any(domain == v or domain.endswith("." + v) for v in VENDOR_DOMAINS))
 
 
@@ -125,6 +129,7 @@ def person_name(local, site_text):
 def emails_in(page):
     """{email: source} — source ranks how deliberately the site published it."""
     found = {}
+    page = re.sub(r"\\u00([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), page)  # JSON-escaped < > in page code
 
     def add(e, src):
         e = unquote(e).strip().strip(".").lower()
@@ -263,6 +268,10 @@ def _selfcheck():
     assert contact_links('<a href="/contact-us">x</a><a href="/shop">Get in touch</a><a href="https://x.com/about">y</a>',
                          "https://acme.com/") == ["https://acme.com/contact-us", "https://acme.com/shop"]
     assert not is_public("http://127.0.0.1/") and not is_public("http://169.254.169.254/") and not is_public("file:///etc/passwd")
+    assert emails_in(r'{"html":"\u003einfo@acme.com\u003c/a"}') == {"info@acme.com": "text"}
+    assert is_junk("3hu3th@dwvtkjcqfz.asia") and is_junk("k1@e3x9m5b7q2.asia") and is_junk("contact@yourstore.com")
+    assert is_junk("mark@gamil.com") and is_junk("info@l1-datenschutz.de") and not is_junk("faed.vintage@gmail.com")
+    assert not is_junk("info@record98.store") and not is_junk("hello@conjurecoffee.com") and not is_junk("x@strengths.com")
     print("selfcheck ok")
 
 
