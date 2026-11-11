@@ -23,6 +23,9 @@
     },
     "api/files.py": {
       "maxDuration": 15
+    },
+    "api/store.py": {
+      "maxDuration": 30
     }
   }
 }

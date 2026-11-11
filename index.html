@@ -463,8 +463,16 @@ $("copy").onclick = async () => {
   $("copy").textContent = "Copied!"; setTimeout(() => $("copy").textContent = "Copy", 1500);
 };
 $("csv").onclick = () => download("scrapeer_emails_" + today() + ".csv", visible(), ["email", "confidence", "type", "first_name", "site", "source", "found_on"]);
-$("tosend").onclick = () => {
-  $("recips").value = ["email,first_name,site,type", ...visible().map(r => [r.email, r.first_name || "", r.site, r.type].map(csvQ).join(","))].join("\n");
+$("tosend").onclick = async () => {
+  // read each store (name, a product it sells, its niche) so every email can mention something real
+  const rows = visible(), sites = [...new Set(rows.map(r => r.site))], info = {}, queue = [...sites], label = $("tosend").textContent;
+  $("tosend").disabled = true;
+  const worker = async () => { while (queue.length) { const s = queue.shift(); info[s] = await post("/api/store", {site: s}, 1);
+    $("tosend").textContent = `Reading stores ${sites.length - queue.length}/${sites.length}…`; } };
+  await Promise.all(Array.from({length: Math.min(6, sites.length)}, worker));
+  $("tosend").disabled = false; $("tosend").textContent = label;
+  const F = ["store", "product", "niche", "product_count"];
+  $("recips").value = ["email,first_name,site,type," + F.join(","), ...rows.map(r => [r.email, r.first_name || "", r.site, r.type, ...F.map(f => info[r.site]?.[f] || "")].map(csvQ).join(","))].join("\n");
   saveDraft(); parseRecips(); showTab("send");
 };
 
