@@ -13,9 +13,18 @@ from _auth import Bad, serve  # noqa: E402
 from _scout import fetch  # noqa: E402
 
 
+# words a cut-off name must not end on (English, German, Spanish, French, Dutch, Italian)
+DANGLING = {"", "for", "with", "and", "of", "the", "a", "an", "in", "to", "by", "on", "from", "&", "+",
+            "für", "fur", "mit", "und", "aus", "der", "die", "das", "von", "zum", "zur", "de", "del", "la", "el",
+            "y", "con", "para", "pour", "et", "le", "les", "du", "des", "en", "voor", "met", "van", "het", "per", "e", "di", "il"}
+
+
 def short(title, words=6):
     title = re.split(r"\s[-|–—:]\s|,|\(", htmllib.unescape(title))[0].strip()
-    return " ".join(title.split()[:words])
+    cut = title.split()[:words]
+    while len(cut) > 1 and cut[-1].lower().strip(".&+") in DANGLING:  # "... aus Granit für" -> "... aus Granit"
+        cut.pop()
+    return " ".join(cut)
 
 
 def store_name(page, site):
@@ -57,6 +66,8 @@ class handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     assert short("Glow Serum - 30ml | Free Shipping") == "Glow Serum"
+    assert short("Personalisierter ovaler Tiergrabstein aus Granit für Hunde") == "Personalisierter ovaler Tiergrabstein aus Granit"
+    assert short("Cozy Blanket for the Sofa and Bed") == "Cozy Blanket for the Sofa"
     assert store_name('<meta property="og:site_name" content="Water Glow">', "waterglow.shop") == "Water Glow"
     assert store_name("", "waterglow.shop") == "Waterglow"
     for s in sys.argv[1:]:
