@@ -79,3 +79,16 @@ P.set(accs, [
   ok(r.log.some(e => e.email === "mid@shop.com"), "an email sent during a save stays in the log");
   ok(r.sent["mid@shop.com"], "...and that person stays marked as emailed");
 })();
+(async () => {
+  const ok = (c, msg) => { console.log((c ? "PASS " : "FAIL ") + msg); if (!c) process.exitCode = 1; };
+  const m = {exports: {}}; new Function("module", "require", src + ";module.exports = {tooManyBounces, isFreeMail, realName, enrich};")(m, require);
+  const {tooManyBounces: b, isFreeMail: f, realName: n, enrich: e} = m.exports, set = new Set(["a", "b", "c"]);
+  ok(!b(["a", "b", "x"], set), "2 bounces don't stop the run");
+  ok(b(["a", "b", "c"], set), "3 bounces stop the run");
+  ok(!b(["a", "b", "c", ...Array(20).fill("x")], set), "old bounces outside the latest 20 don't count");
+  ok(f("x@gmail.com") && f("x@outlook.fr") && !f("x@gmailshop.com") && !f("x@legacyfalcon.tech"), "Gmail/Outlook detection");
+  ok(n("Tanya") === "Tanya" && n("Kontakt") === "" && n("Www") === "" && n("Designs") === "", "only real first names are used");
+  ok(!e({email: "designs-swivels.25@icloud.com", type: "person"}).first_name, "no made-up name from a business address");
+  ok(e({email: "elsa.chiao@gmail.com", type: "person"}).first_name === "Elsa", "real first.last still gets a name");
+  ok(e({email: "a@b.com", first_name: "Zaccai"}).first_name === "Zaccai", "a name you upload yourself is kept");
+})();

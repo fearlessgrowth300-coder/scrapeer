@@ -309,6 +309,7 @@ input,textarea,select{font-size:16px!important}
         <div class="field"><label for="cap">Overall max per day</label><input type="number" id="cap" placeholder="no extra limit" min="1"></div>
       </div>
       <p class="hint" style="margin-top:-4px">The app rotates through your accounts and stops each one at its daily limit. New domains: start ~50/day and raise it weekly. Keep this tab open while sending.</p>
+      <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="freefirst" checked> Send to Gmail/Outlook addresses first (fewer bounces)</label>
       <div class="btns" style="margin-top:12px">
         <button class="ghost" id="send-test">Send test to myself</button>
         <button class="primary" id="send-start">Start sending</button>
@@ -477,7 +478,7 @@ $("tosend").onclick = async () => {
   await Promise.all(Array.from({length: Math.min(6, sites.length)}, worker));
   $("tosend").disabled = false; $("tosend").textContent = label;
   const F = ["store", "product", "niche", "product_count"];
-  $("recips").value = ["email,first_name,site,type," + F.join(","), ...rows.map(r => [r.email, r.first_name || "", r.site, r.type, ...F.map(f => info[r.site]?.[f] || "")].map(csvQ).join(","))].join("\n");
+  $("recips").value = ["email,first_name,site,type," + F.join(","), ...rows.map(r => [r.email, realName(r.first_name), r.site, r.type, ...F.map(f => info[r.site]?.[f] || "")].map(csvQ).join(","))].join("\n");
   saveDraft(); parseRecips(); showTab("send");
 };
 
@@ -498,10 +499,13 @@ function parseCSV(text) {
 }
 const EMAIL_RE = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[a-z]{2,}$/i;
 const cap1 = s => s ? s[0].toUpperCase() + s.slice(1).toLowerCase() : "";
+// real first names only: "Hi there" beats "Hi Designs" (ponytail: short list; a name not on it just gets "Hi there")
+const NAMES = new Set("aaron abigail adam adebayo aditya adriana ahmed aisha alain alan albert alejandra alejandro alessandro alessia alex alexander alexis ali alice amanda amara amber amelie amit amy ana ananya anastasia anders andre andrea andreas andres andrew angela anil anja anjali ann anna anthony antoine antonio arjun arthur asad ashley astrid austin ava ayesha barbara beatriz ben benjamin betty beverly bilal bill billy birgit bjorn bob bobby bola bradley brandon brenda brian brittany brooklyn bruce bruno bryan camila camille carl carlos carmen carol carolyn catherine celine charles charlotte chen cheryl chiara chidi chinedu chioma chloe chris christian christina christine claire clara colin craig cynthia dan dana daniel daniela danielle david deborah debra deepak denise dennis diana diane diego divya dmitri donald donna doris dorothy douglas dylan eduardo edward elena elizabeth ella elsa emeka emily emma eric erica erik erin ethan eugene evelyn fatima federica felix femi fernanda fernando florian frances francesca francesco francisco frank freya funke gabriel gabriela gary george gerald giovanni giulia giuseppe gloria gordon grace greg gregory hamza hannah hans harold harry hassan heather hector heike helen henry hina hiro holly hugo hussein ian ibrahim imran ines ingrid irina isabel isabella isabelle ivan jack jacob jacqueline jade james jan janet janice jason javier jean jeff jeffrey jennifer jenny jeremy jerry jesse jessica jill joan joao joe johan john johnny jonas jonathan jordan jorge jose joseph josh joshua joyce juan judith judy julia julie julien jun jurgen justin karan karen katarzyna kate katherine kathleen kathryn katie katrin kavita kayla keith kelly kenji kenneth kevin khadija khalid kim kimberly klaus kofi kwame kyle lara larry lars laura lauren lawrence leah lena leo liam lily linda ling lisa logan lorena lorenzo lori louis luca lucia lucie lucy luis lukas luke madison manon manuel marco marek margaret maria mariana marie marilyn marine mark markus marta martha martin martina mary maryam mateo matt matteo matthew max megan mei melissa mia michael michel michelle miguel mike ming mohamed mohammed molly monica monika moritz muhammad nancy naomi natalia natalie natasha nathalie nathan neha neil ngozi nicholas nick nicolas nicole nikhil nikolai nils nina noah olga oliver olivia omar oscar owen pablo paige pallavi pamela paolo patricia patrick paul paula pedro peter petra philip philippe pierre piotr pooja priya rachel rafael rahul raj ralph ramesh randy raul ravi raymond rebecca ricardo richard rob robert roberto roger rohit ronald rosa ross roy ruby rui russell ruth ryan sabine sakura sam samantha samuel sana sandra sanjay santiago sara sarah scott sean sebastian sergei sergio seun sharon shirley shreya silvia simon sofia sophia sophie stefan stefano stephanie stephen steve steven stuart sunita suresh susan sven svetlana tanya tara tariq tatiana teresa terry theresa thomas tiago tiffany tim timothy tina tobias tom tomasz tunde tyler ursula usman uwe valentina vanessa victoria vijay vincent virginia walter wayne wei william willie wolfgang yemi yuki yusuf zachary zainab zoe".split(" "));
+const realName = n => NAMES.has(String(n || "").toLowerCase()) ? n : "";
 function enrich(r) {
   const [local, domain = ""] = r.email.split("@"), parts = local.split(/[._-]/), first = parts[0];
   // only guess from "first.last" style addresses; "jdoe@" would give "Jdoe" (the scraper confirms names from the site)
-  if (!r.first_name && parts.length > 1 && /^[a-z]{2,}$/i.test(first) && !ROLE.has(first.toLowerCase()) && r.type !== "role")
+  if (!r.first_name && parts.length > 1 && realName(first) && !ROLE.has(first.toLowerCase()) && r.type !== "role")
     r.first_name = cap1(first);
   r.site = r.site || domain;
   if (!r.company) r.company = cap1(r.site.replace(/^www\./, "").split(".")[0]);
@@ -793,6 +797,9 @@ $("send-test").onclick = async () => {
   setMsg("send-msg", `✓ Test sent via ${a.label} to ${me} — check your inbox (and spam). To test another account, move it to the top with ↑.`, "ok");
 };
 
+const isFreeMail = e => /@(gmail|googlemail|outlook|hotmail|live|yahoo|icloud|me|aol|proton|protonmail)[.]/i.test(e);
+// the brake: bounces hurt the domain, so a run stops itself when too many of its latest emails come back
+const bouncedNow = new Set(), tooManyBounces = (sentThisRun, bounced) => sentThisRun.slice(-20).filter(e => bounced.has(e)).length >= 3;
 let sending = false, wake = null;
 const sleep = ms => new Promise(res => { const t = setTimeout(res, ms); wake = () => { clearTimeout(t); res(); }; });
 $("send-stop").onclick = () => { sending = false; wake?.(); };
@@ -800,12 +807,14 @@ $("send-start").onclick = async () => {
   parseRecips();
   const blocked = dneSet(), queue = recipients.filter(r => !blocked.has(r.email) && !sentMap()[r.email]);
   if (!queue.length) return setMsg("send-msg", "No one left to email (everyone is already emailed or on the do-not-email list).", "err");
+  if ($("freefirst").checked) queue.sort((a, b) => isFreeMail(b.email) - isFreeMail(a.email));
   const problem = checkReady(queue[0]); if (problem) return setMsg("send-msg", problem, "err");
   const [lo, hi] = ($("delay").value.match(/\d+/g) || [15, 30]).map(Number), cap = Number($("cap").value) || Infinity;
   const pool = sendingPool(), full = new Set(), broken = new Set();
   if (!confirm(`Send to ${queue.length} people? Uses ${pool[0].label} first; when it's full for the day the next account takes over.`)) return;
   sending = true; $("send-start").disabled = $("send-test").disabled = true; $("send-stop").disabled = false;
   let sent = 0, fails = 0, done = 0, consecutiveFails = 0, stopReason = "", i = 0;
+  const runSent = [];
   // first account in your order that still has room today (and works) — fill it, then move to the next
   const pick = () => pool.find(a => !full.has(a.id) && !broken.has(a.id) && sentTodayVia(a.label) < a.cap) || null;
   // daily counts reset at midnight UTC (that's when the providers reset too); +1 min margin
@@ -815,6 +824,7 @@ $("send-start").onclick = async () => {
     renderAccounts(); await sleep(Math.max(60000, until - Date.now())); full.clear(); renderAccounts();
   };
   while (i < queue.length && sending) {
+    if (tooManyBounces(runSent, bouncedNow)) { stopReason = "Stopped to protect your domain: 3 of your latest 20 emails bounced. Check your list before sending more."; break; }
     const r = queue[i];
     if (sentMap()[r.email] || dneSet().has(r.email)) { i++; done++; continue; }  // bounced/spam-flagged meanwhile
     const sentToday = log.filter(l => l.date === today() && l.status === "sent").length;
@@ -835,7 +845,7 @@ $("send-start").onclick = async () => {
     if (d.error) {
       fails++; consecutiveFails++; record(r.email, "failed", d.error, a.label);
       if (consecutiveFails >= 5) { stopReason = "Stopped after 5 failures in a row: " + d.error; break; }
-    } else { sent++; consecutiveFails = 0; { const m = compose(r); record(r.email, "sent", "", a.label, m.subject, m.body, d.message_id); } }
+    } else { sent++; runSent.push(r.email); consecutiveFails = 0; { const m = compose(r); record(r.email, "sent", "", a.label, m.subject, m.body, d.message_id); } }
     i++; done++;
     $("st-sent").textContent = sent; $("st-failed").textContent = fails; $("send-fill").style.width = (100 * done / queue.length) + "%";
     if (done < queue.length && sending) {
@@ -1106,6 +1116,7 @@ async function pollEvents() {
     else if (e.type === "email.bounced") toast(`⚠ Email to ${who} bounced`, "That address doesn't work — it won't be emailed again.", key);
     else if (e.type === "email.complained") toast(`⚠ ${who} marked you as spam`, "Added to do-not-email.", key);
     if (e.type === "email.bounced" || e.type === "email.complained") {  // protect the account: never email them again
+      bouncedNow.add(who.toLowerCase());
       const list = $("dne").value.trim(); if (!list.toLowerCase().includes(who)) { $("dne").value = (list ? list + "\n" : "") + who; store.set("scrapeer-dne", $("dne").value); }
     }
   }

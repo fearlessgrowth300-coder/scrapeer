@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from http.server import BaseHTTPRequestHandler
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -30,7 +31,11 @@ def short(title, words=6):
 def store_name(page, site):
     m = (re.search(r'property=["\']og:site_name["\'][^>]*content=["\']([^"\']+)', page, re.I)
          or re.search(r"<title[^>]*>([^<]+)", page, re.I))
-    name = short(m.group(1), 4) if m else ""
+    name = ""
+    if m:  # a site_name is already just the name ("Love, Logan"), only a page title needs cutting down
+        raw = htmllib.unescape(m.group(1))
+        name = " ".join(raw.split()[:5]) if "site_name" in m.group(0) else short(raw, 4)
+        name = "".join(c for c in name if unicodedata.category(c) not in ("So", "Sk", "Cf", "Cs")).strip()  # flags, emoji
     return name or site.split(".")[0].capitalize()
 
 
@@ -70,6 +75,9 @@ if __name__ == "__main__":
     assert short("Cozy Blanket for the Sofa and Bed") == "Cozy Blanket for the Sofa"
     assert store_name('<meta property="og:site_name" content="Water Glow">', "waterglow.shop") == "Water Glow"
     assert store_name("", "waterglow.shop") == "Waterglow"
+    assert store_name('<meta property="og:site_name" content="Love, Logan">', "x.shop") == "Love, Logan"
+    assert store_name('<meta property="og:site_name" content="Ecuador 🇪🇨">', "x.shop") == "Ecuador"
+    assert store_name("<title>Glow - Home</title>", "x.shop") == "Glow"
     for s in sys.argv[1:]:
         print(s, facts(s))
     print("selfcheck ok")
