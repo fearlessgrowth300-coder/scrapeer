@@ -365,7 +365,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 // Private data (sent log, already-emailed, do-not-email, drafts, read replies) lives in your account on the server;
 // only harmless UI preferences stay in this browser.
-const SYNCED = {"scrapeer-log": "log", "scrapeer-sent": "sent", "scrapeer-dne": "dne", "scrapeer-draft": "draft", "scrapeer-read": "read", "scrapeer-reply": "reply", "scrapeer-order": "order", "scrapeer-refs": "refs", "scrapeer-sig": "sig"};
+const SYNCED = {"scrapeer-log": "log", "scrapeer-sent": "sent", "scrapeer-dne": "dne", "scrapeer-draft": "draft", "scrapeer-read": "read", "scrapeer-reply": "reply", "scrapeer-order": "order", "scrapeer-refs": "refs", "scrapeer-sig": "sig", "scrapeer-scrapes": "scrapes"};
 let state = {}, saveTimer = null, sb = null, signedIn = false;
 const local = {get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
@@ -454,6 +454,8 @@ $("go").onclick = async () => {
     }
   };
   await Promise.all(Array.from({length: Math.min(6, sites.length)}, worker));
+  // last 5 searches saved to the account so they show on any device
+  store.set("scrapeer-scrapes", [{at: Date.now(), sites, failed, results}, ...store.get("scrapeer-scrapes", [])].slice(0, 5));
   $("go").disabled = $("sites").disabled = false; $("go").textContent = "Find emails";
 };
 $("copy").onclick = async () => {
