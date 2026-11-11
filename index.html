@@ -116,7 +116,7 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
 .file-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .file-chip button{width:22px;height:22px;padding:0;border-radius:50%;background:transparent;color:var(--muted);font-size:12px}
 .bubble .att{display:block;font-size:13px;margin-top:4px;opacity:.95}
-.sig-logo{max-width:160px;max-height:80px;border-radius:6px;border:1px solid var(--line);display:block;margin:6px 0}
+.sig-logo[hidden]{display:none}.sig-logo{max-width:160px;max-height:80px;border-radius:6px;border:1px solid var(--line);display:block;margin:6px 0}
 @media (max-width:820px){.chat{grid-template-columns:1fr;height:calc(100vh - 140px)}.chat.open .chat-list{display:none}.chat:not(.open) .chat-main{display:none}.chat-head .back{display:inline-block}}
 .toasts{position:fixed;right:16px;bottom:16px;z-index:50;display:flex;flex-direction:column;gap:8px;max-width:min(360px,calc(100vw - 32px))}
 .toast{display:flex;gap:10px;align-items:flex-start;text-align:left;background:var(--card);color:var(--ink);border:1px solid var(--line);border-left:4px solid var(--high);border-radius:12px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.18);font-weight:400;animation:pop .25s ease-out}
@@ -280,7 +280,7 @@ input,textarea,select{font-size:16px!important}
   </div>
   <div class="col">
     <div class="card">
-      <h2>3. Message</h2>
+      <div class="top"><h2>3. Message</h2><button class="ghost" type="button" id="starter">Use a starter message</button></div>
       <div class="field"><label for="subject">Subject</label><input type="text" id="subject" placeholder="Quick question about {{company}}"></div>
       <div class="field"><label for="body">Message</label>
         <textarea id="body" placeholder="Hi {{first_name|there}},&#10;&#10;I came across {{site}} and..."></textarea>
@@ -771,6 +771,7 @@ function checkReady(r) {
   if (!sendingPool().length) return "Add a sending account in step 1 first.";
   if (!m.subject || !$("body").value.trim()) return "Write a subject and message first.";
   if (/\{\{/.test(m.subject + m.body)) return "A {{field}} isn't filled in — check the preview.";
+  if (m.body.includes("[change this")) return "Change the [change this to what you do] part of the message first.";
   return "";
 }
 $("send-test").onclick = async () => {
@@ -1164,6 +1165,18 @@ $("sig-input").onchange = async e => {
 };
 
 /* ---------- restore ---------- */
+$("starter").onclick = () => {
+  if (($("subject").value.trim() || $("body").value.trim()) && !confirm("Replace your subject and message with the starter message?")) return;
+  $("subject").value = "quick question about {{product|your store}}";
+  $("body").value = `Hi {{first_name|there}},
+
+I was looking at {{store|your store}} and saw the {{product|products you just added}}. Nice pick.
+
+Quick question: is it getting steady sales yet, or is traffic still slow?
+
+I help stores like yours get more sales [change this to what you do]. Happy to send 2-3 ideas for {{store|your store}} if useful.`;
+  saveDraft(); renderPreview(); $("body").focus();
+};
 function saveDraft() { store.set("scrapeer-draft", {recips: $("recips").value, subject: $("subject").value, body: $("body").value,
   footer: $("footer").value, delay: $("delay").value, cap: $("cap").value}); }
 function restoreUI() {
