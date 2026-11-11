@@ -584,7 +584,7 @@ async function domainStep(action, quiet) {
   if (d.error) { clearInterval(autoCheck); return setMsg("dom-msg", d.error, "err"); }
   renderDNS(d);
   if (d.status === "verified") {
-    clearInterval(autoCheck);
+    clearInterval(autoCheck); $("dns").hidden = true;  // all records are good: nothing left to add
     const from = $("acc-from").value.trim();
     if (!from.endsWith("@" + domain) || from === "hello@" + domain) { $("acc-from").value = nameLocal() + "@" + domain; saveAccount(); }
     updateFromPreview();
@@ -1168,7 +1168,11 @@ function restoreUI() {
   if (acc) for (const k of ACC) if (acc[k] != null && acc[k] !== "" && k !== "key" && k !== "pass") $("acc-" + k).value = acc[k];
   showProvider();
   $("acc-from").dataset.auto = nameLocal(); updateFromPreview();
-  if ($("acc-provider").value === "resend" && $("acc-domain").value) domainStep("connect", true);
+  const dom = cleanDomain($("acc-domain").value);
+  if ($("acc-provider").value === "resend" && dom) {
+    if (accounts.some(a => a.provider === "resend" && a.domain === dom)) setMsg("dom-msg", `✓ ${dom} is connected and saved in your accounts.`, "ok");
+    else domainStep("connect", true);  // still setting up: show the records to add
+  }
   showReplyState(); renderSig();
   parseRecips(); renderLog(); renderAccounts();
   showTab(local.get("scrapeer-tab", "find") || "find");
