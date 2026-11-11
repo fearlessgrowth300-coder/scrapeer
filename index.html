@@ -280,7 +280,11 @@ input,textarea,select{font-size:16px!important}
   </div>
   <div class="col">
     <div class="card">
-      <div class="top"><h2>3. Message</h2><button class="ghost" type="button" id="starter">Use a starter message</button></div>
+      <div class="top"><h2>3. Message</h2></div>
+      <div class="field"><label for="tpl">Template</label>
+        <div style="display:flex;gap:6px;flex-wrap:wrap"><select id="tpl" style="flex:1;min-width:0;border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:var(--bg);color:var(--ink);font:14px system-ui,sans-serif"></select>
+        <button class="ghost" type="button" id="tpl-save">Save as template</button><button class="ghost" type="button" id="tpl-del" disabled>Delete</button></div>
+        <p class="hint">Pick one and it fills the subject and message. Store details like {{store}} fill in for each email.</p></div>
       <div class="field"><label for="subject">Subject</label><input type="text" id="subject" placeholder="Quick question about {{company}}"></div>
       <div class="field"><label for="body">Message</label>
         <textarea id="body" placeholder="Hi {{first_name|there}},&#10;&#10;I came across {{site}} and..."></textarea>
@@ -366,7 +370,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 // Private data (sent log, already-emailed, do-not-email, drafts, read replies) lives in your account on the server;
 // only harmless UI preferences stay in this browser.
-const SYNCED = {"scrapeer-log": "log", "scrapeer-sent": "sent", "scrapeer-dne": "dne", "scrapeer-draft": "draft", "scrapeer-read": "read", "scrapeer-reply": "reply", "scrapeer-order": "order", "scrapeer-refs": "refs", "scrapeer-sig": "sig", "scrapeer-scrapes": "scrapes"};
+const SYNCED = {"scrapeer-log": "log", "scrapeer-sent": "sent", "scrapeer-dne": "dne", "scrapeer-draft": "draft", "scrapeer-read": "read", "scrapeer-reply": "reply", "scrapeer-order": "order", "scrapeer-refs": "refs", "scrapeer-sig": "sig", "scrapeer-scrapes": "scrapes", "scrapeer-templates": "templates"};
 let state = {}, saveTimer = null, sb = null, signedIn = false;
 const local = {get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
@@ -1181,22 +1185,46 @@ $("sig-input").onchange = async e => {
 };
 
 /* ---------- restore ---------- */
-$("starter").onclick = () => {
-  if (($("subject").value.trim() || $("body").value.trim()) && !confirm("Replace your subject and message with the starter message?")) return;
-  $("subject").value = "quick question about {{product|your store}}";
-  $("body").value = `Hi {{first_name|there}},
+const STARTER = {name: "Starter: store outreach", subject: "quick question about {{product|your store}}",
+  body: `Hi {{first_name|there}},
 
 I was looking at {{store|your store}} and saw the {{product|products you just added}}. Nice pick.
 
 Quick question: is it getting steady sales yet, or is traffic still slow?
 
-I help stores like yours get more sales [change this to what you do]. Happy to send 2-3 ideas for {{store|your store}} if useful.`;
+I help stores like yours get more sales [change this to what you do]. Happy to send 2-3 ideas for {{store|your store}} if useful.`};
+const templates = () => [STARTER, ...store.get("scrapeer-templates", [])];
+function renderTemplates(pick = "") {
+  $("tpl").innerHTML = '<option value="">Choose a template…</option>' + templates().map((t, n) => `<option value="${n}">${esc(t.name)}</option>`).join("");
+  $("tpl").value = pick; $("tpl-del").disabled = !(+$("tpl").value > 0);
+}
+$("tpl").onchange = () => {
+  const t = templates()[$("tpl").value]; $("tpl-del").disabled = !(+$("tpl").value > 0);
+  if (!t) return;
+  const cur = [$("subject").value.trim(), $("body").value.trim()];
+  if (cur.some(Boolean) && (cur[0] !== t.subject.trim() || cur[1] !== t.body.trim()) && !confirm(`Replace your subject and message with "${t.name}"?`)) return;
+  $("subject").value = t.subject; $("body").value = t.body;
   saveDraft(); renderPreview(); $("body").focus();
+};
+$("tpl-save").onclick = () => {
+  const subject = $("subject").value, body = $("body").value;
+  if (!subject.trim() || !body.trim()) return setMsg("send-msg", "Write a subject and message first, then save it as a template.", "err");
+  const cur = templates()[$("tpl").value], name = (prompt("Name this template:", cur && cur !== STARTER ? cur.name : "") || "").trim();
+  if (!name) return;
+  const list = store.get("scrapeer-templates", []).filter(t => t.name !== name);
+  list.push({name, subject, body}); store.set("scrapeer-templates", list);
+  renderTemplates(String(list.length)); setMsg("send-msg", `Saved "${name}". Pick it from Template any time.`, "ok");
+};
+$("tpl-del").onclick = () => {
+  const t = templates()[$("tpl").value];
+  if (!t || t === STARTER || !confirm(`Delete the template "${t.name}"?`)) return;
+  store.set("scrapeer-templates", store.get("scrapeer-templates", []).filter(x => x.name !== t.name)); renderTemplates();
 };
 function saveDraft() { store.set("scrapeer-draft", {recips: $("recips").value, subject: $("subject").value, body: $("body").value,
   footer: $("footer").value, delay: $("delay").value, cap: $("cap").value}); }
 function restoreUI() {
   log = store.get("scrapeer-log", []);
+  renderTemplates();
   const d = store.get("scrapeer-draft", {});
   if (d.cap === "50") d.cap = "";  // old default would silently cap rotation at 50
   for (const k of ["recips", "subject", "body", "footer", "delay", "cap"]) if (d[k] != null) $(k).value = d[k];
