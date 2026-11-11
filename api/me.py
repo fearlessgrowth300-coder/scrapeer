@@ -156,7 +156,13 @@ def handle(body, user):
         rows = db("GET", "scrapeer_accounts", {"user_id": f"eq.{user['id']}", "order": "created_at.asc",
                                                "select": "id,label,provider,cap,public"}) or []
         st = db("GET", "scrapeer_state", {"user_id": f"eq.{user['id']}", "select": "data"}) or []
-        return {"email": user["email"], "accounts": [public_row(r) for r in rows], "state": st[0]["data"] if st else {}}
+        state = st[0]["data"] if st else {}
+        from _scout import is_junk  # noqa: E402  (re-check saved searches with the current junk rules)
+        for sc in state.get("scrapes") or []:
+            for e in sc.get("results") or []:
+                e["email"] = e.get("email", "").removeprefix("u003e")
+            sc["results"] = [e for e in sc.get("results") or [] if not is_junk(e["email"])]
+        return {"email": user["email"], "accounts": [public_row(r) for r in rows], "state": state}
 
     if action == "add_account":
         from send import send  # noqa: E402  (verify the login before saving it)

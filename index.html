@@ -1249,6 +1249,13 @@ async function enterApp(session) {
   $("nav").hidden = $("who").hidden = false;
   await migrateLocal();
   restoreUI();
+  const last = (state.scrapes || [])[0];  // bring back the last search after a refresh
+  if (last && !results.length) {
+    results = last.results || []; failed = last.failed || [];
+    $("sites").value = (last.sites || []).join("\n"); $("sites").oninput();
+    $("done").textContent = (last.sites || []).length + "/" + (last.sites || []).length; $("failed").textContent = failed.length;
+    $("fill").style.width = "100%"; renderFind();
+  }
   $("alerts").hidden = !("Notification" in window) || Notification.permission === "granted";
   startLive();
 }
