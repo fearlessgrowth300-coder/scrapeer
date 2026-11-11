@@ -68,3 +68,14 @@ P.set(accs, [
   ok(where("in-2") === "mj-acc", "reply to the Mailjet email → Mailjet chat (Resend ruled out by its ID)");
   ok(where("in-3") === BR, "reply to the Brevo email → Brevo chat (subject match)");
 })();
+(async () => {
+  const ok = (c, msg) => { console.log((c ? "PASS " : "FAIL ") + msg); if (!c) process.exitCode = 1; };
+  const m = {exports: {}}; new Function("module", "require", src + `
+;module.exports = {go: async () => { signedIn = true; let done; post = () => new Promise(r => done = r);
+    const saving = saveState(); record("mid@shop.com", "sent", "", "Resend");
+    done({log: [], sent: {}, read: [], refs: {}}); await saving; clearTimeout(saveTimer);
+    return {log, sent: state.sent}; }};`)(m, require);
+  const r = await m.exports.go();
+  ok(r.log.some(e => e.email === "mid@shop.com"), "an email sent during a save stays in the log");
+  ok(r.sent["mid@shop.com"], "...and that person stays marked as emailed");
+})();

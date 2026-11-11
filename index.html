@@ -376,10 +376,15 @@ async function saveState() {
   clearTimeout(saveTimer); if (!signedIn) return;
   // the server MERGES history from every tab/device and sends back the combined result, so a tab that was
   // open for hours can't wipe newer history, and this tab catches up with what other tabs sent
+  const before = new Set(state.log || []);
   const d = await post("/api/me", {action: "save_state", state: {...state, log: (state.log || []).slice(0, 3000)}}, 2);
   if (d.error) return console.warn("save failed:", d.error);
-  for (const k of ["log", "sent", "read", "refs"]) if (d[k]) state[k] = d[k];
-  if (d.log) { log = d.log; renderLog(); renderAccounts(); }
+  // anything sent while this save was in flight isn't in the server's reply: keep it, or that person could be emailed twice
+  if (d.log) state.log = [...(state.log || []).filter(e => !before.has(e)), ...d.log];
+  if (d.sent) state.sent = {...d.sent, ...state.sent};
+  if (d.read) state.read = [...new Set([...d.read, ...(state.read || [])])];
+  if (d.refs) state.refs = {...d.refs, ...state.refs};
+  if (d.log) { log = state.log; renderLog(); renderAccounts(); }
 }
 document.addEventListener("visibilitychange", () => { if (document.hidden && saveTimer) saveState(); });
 const csvQ = v => '"' + String(v ?? "").replace(/"/g, '""') + '"';
