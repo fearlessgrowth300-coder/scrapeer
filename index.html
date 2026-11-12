@@ -397,7 +397,7 @@ async function saveState() {
   if (d.refs) state.refs = {...d.refs, ...state.refs};
   if (d.log) { log = state.log; renderLog(); renderAccounts(); }
 }
-document.addEventListener("visibilitychange", () => { if (document.hidden && saveTimer) saveState(); });
+document.addEventListener("visibilitychange", () => { if (document.hidden && saveTimer) saveState(); if (!document.hidden && signedIn) loadInbox(true); });
 const csvQ = v => '"' + String(v ?? "").replace(/"/g, '""') + '"';
 function download(name, rows, cols) {
   const csv = [cols.join(","), ...rows.map(r => cols.map(c => csvQ(r[c])).join(","))].join("\n");
@@ -913,7 +913,7 @@ const unreadTotal = () => [...convos.values()].reduce((n, c) => n + c.unread, 0)
 
 async function loadInbox(quiet) {
   clearInterval(inboxTimer);
-  inboxTimer = setInterval(() => { if (!$("inbox").hidden && !document.hidden) loadInbox(true); }, 30000);
+  inboxTimer = setInterval(() => loadInbox(true), 30000);
   if (inboxBusy) return; inboxBusy = true;
   if (!quiet) setMsg("ib-msg", "Loading…");
   const [sent, inbox] = resendAccounts().length
@@ -921,7 +921,7 @@ async function loadInbox(quiet) {
     : [{emails: []}, {replies: []}];
   inboxBusy = false;
   if (sent.error || inbox.error) return setMsg("ib-msg", sent.error || inbox.error, "err");
-  setMsg("ib-msg", resendAccounts().length ? "" : "Tip: add a Resend account in the Send tab to get replies here.");
+  setMsg("ib-msg", resendAccounts().length ? "Updates by itself · last checked " + new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : "Tip: add a Resend account in the Send tab to get replies here.");
   const mine = new Set(accounts.map(a => addrOf(a.from)).concat(replyInfo()?.address || []).filter(Boolean));
   const map = new Map(), convo = (accId, email, via) => {
     const key = chatKey(accId, email);
@@ -1154,7 +1154,7 @@ async function pollEvents() {
   else if (d.events.length) { renderConvos(); if (activeKey) renderThread(); }
 }
 function startLive() {
-  clearInterval(liveTimer); pollEvents();
+  clearInterval(liveTimer); pollEvents(); loadInbox(true);  // starts the inbox auto-refresh right after sign-in
   // every 10s while you're looking, every 40s in the background (pop-ups/desktop alerts still arrive)
   let n = 0; liveTimer = setInterval(() => { n++; if (!document.hidden || n % 4 === 0) pollEvents(); if (!$("inbox").hidden) { renderConvos(); if (activeKey) renderThread(); } }, 10000);
 }
