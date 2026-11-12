@@ -92,3 +92,13 @@ P.set(accs, [
   ok(e({email: "elsa.chiao@gmail.com", type: "person"}).first_name === "Elsa", "real first.last still gets a name");
   ok(e({email: "a@b.com", first_name: "Zaccai"}).first_name === "Zaccai", "a name you upload yourself is kept");
 })();
+(() => {
+  const ok = (c, msg) => { console.log((c ? "PASS " : "FAIL ") + msg); if (!c) process.exitCode = 1; };
+  const m = {exports: {}}; new Function("module", "require", src + ";module.exports = {historyRows, countsFromLog};")(m, require);
+  const {historyRows: h, countsFromLog: c} = m.exports;
+  const counts = c([{date: "2026-11-12", status: "sent", via: "A"}, {date: "2026-11-11", status: "sent", via: "A"}, {date: "2026-11-11", status: "failed", via: "A"},
+                    {date: "2026-11-08", status: "sent", via: "B"}, {date: "2026-10-30", status: "sent", via: "A"}]);
+  const r = h(counts, "2026-11-12");  // a Thursday: week starts Monday 11-09
+  ok(JSON.stringify(r.A) === "[1,2,2,3]", "history: today / week / month / all time for one sender");
+  ok(JSON.stringify(r.B) === "[0,0,1,1]", "history: last Sunday is not this week");
+})();

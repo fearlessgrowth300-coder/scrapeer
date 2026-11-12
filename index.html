@@ -321,7 +321,12 @@ input,textarea,select{font-size:16px!important}
       </div>
       <div class="msg" id="send-msg" role="status"></div>
       <div class="bar" aria-hidden="true"><i id="send-fill"></i></div>
-      <div class="stats"><div><b id="st-sent">0</b>sent</div><div><b id="st-today">0</b>sent today</div><div><b id="st-failed">0</b>failed</div></div>
+      <div class="stats"><div><b id="st-sent">0</b>sent this run</div><div><b id="st-today">0</b>sent today</div><div><b id="st-failed">0</b>failed this run</div></div>
+    </div>
+    <div class="card">
+      <div class="top"><h2>Send history</h2></div>
+      <div class="tablewrap"><table><thead><tr><th>Sender</th><th>Today</th><th>This week</th><th>This month</th><th>All time</th></tr></thead><tbody id="history"></tbody></table></div>
+      <p class="hint">Emails sent by each sender. Days start at midnight UTC, weeks on Monday.</p>
     </div>
     <div class="card">
       <div class="top"><h2>Sent log</h2><div class="btns"><button class="ghost" id="log-csv">Download</button><button class="ghost" id="log-clear">Clear</button></div></div>
@@ -370,7 +375,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 // Private data (sent log, already-emailed, do-not-email, drafts, read replies) lives in your account on the server;
 // only harmless UI preferences stay in this browser.
-const SYNCED = {"scrapeer-log": "log", "scrapeer-sent": "sent", "scrapeer-dne": "dne", "scrapeer-draft": "draft", "scrapeer-read": "read", "scrapeer-reply": "reply", "scrapeer-order": "order", "scrapeer-refs": "refs", "scrapeer-sig": "sig", "scrapeer-scrapes": "scrapes", "scrapeer-templates": "templates"};
+const SYNCED = {"scrapeer-log": "log", "scrapeer-sent": "sent", "scrapeer-dne": "dne", "scrapeer-draft": "draft", "scrapeer-read": "read", "scrapeer-reply": "reply", "scrapeer-order": "order", "scrapeer-refs": "refs", "scrapeer-sig": "sig", "scrapeer-scrapes": "scrapes", "scrapeer-templates": "templates", "scrapeer-counts": "counts"};
 let state = {}, saveTimer = null, sb = null, signedIn = false;
 const local = {get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
@@ -761,11 +766,30 @@ function record(email, status, note, via, subj, body, mid, att) {
                ...(subj ? {subj: String(subj).slice(0, 200)} : {}), ...(body ? {snip: String(body).slice(0, 300)} : {}),
                ...(mid ? {mid: String(mid).toLowerCase()} : {}), ...(att && att.length ? {att} : {})});
   log = log.slice(0, 3000); store.set("scrapeer-log", log);
-  if (status === "sent") { const s = sentMap(); s[email] = today(); store.set("scrapeer-sent", s); }
+  if (status === "sent") { const s = sentMap(); s[email] = today(); store.set("scrapeer-sent", s);
+    const c = store.get("scrapeer-counts", {}), k = today() + "|" + (via || ""); c[k] = (c[k] || 0) + 1; store.set("scrapeer-counts", c); }
   renderLog(); renderAccounts();
+}
+// daily totals per sender live apart from the log, so they survive the log's 3000-line cap and "Clear"
+const countsFromLog = l => l.filter(e => e.status === "sent").reduce((c, e) => { const k = e.date + "|" + (e.via || ""); c[k] = (c[k] || 0) + 1; return c; }, {});
+function historyRows(counts, t) {
+  const monday = new Date(Date.parse(t) - ((new Date(t).getUTCDay() + 6) % 7) * 864e5).toISOString().slice(0, 10), rows = {};
+  for (const [k, n] of Object.entries(counts)) {
+    const [d, via] = [k.slice(0, 10), k.slice(11) || "Unknown sender"], r = rows[via] ||= [0, 0, 0, 0];
+    r[0] += d === t ? n : 0; r[1] += d >= monday && d <= t ? n : 0; r[2] += d.slice(0, 7) === t.slice(0, 7) ? n : 0; r[3] += n;
+  }
+  return rows;
+}
+function renderHistory() {
+  const rows = Object.entries(historyRows(store.get("scrapeer-counts", {}), today())).sort((a, b) => b[1][3] - a[1][3]);
+  const total = rows.reduce((s, [, r]) => s.map((x, i) => x + r[i]), [0, 0, 0, 0]);
+  $("history").innerHTML = rows.map(([via, r]) => `<tr><td class="email">${esc(via)}</td>${r.map(n => `<td>${n}</td>`).join("")}</tr>`).join("") +
+    (rows.length > 1 ? `<tr><td><b>Everyone</b></td>${total.map(n => `<td><b>${n}</b></td>`).join("")}</tr>` : "") ||
+    `<tr><td colspan="5" class="empty">Nothing sent yet.</td></tr>`;
 }
 function renderLog() {
   const t = today();
+  renderHistory();
   $("st-today").textContent = log.filter(l => l.date === t && l.status === "sent").length;
   $("log").innerHTML = log.slice(0, 200).map(l => `<tr><td>${esc(l.when)}</td><td class="email">${esc(l.email)}</td>
     <td><span class="pill ${l.status}">${l.status}</span> ${esc(l.note)}${l.via ? `<div class="hint">via ${esc(l.via)}</div>` : ""}</td></tr>`).join("") ||
@@ -1224,6 +1248,7 @@ function saveDraft() { store.set("scrapeer-draft", {recips: $("recips").value, s
   footer: $("footer").value, delay: $("delay").value, cap: $("cap").value}); }
 function restoreUI() {
   log = store.get("scrapeer-log", []);
+  if (!Object.keys(store.get("scrapeer-counts", {})).length && log.length) store.set("scrapeer-counts", countsFromLog(log));  // first load: build from history
   renderTemplates();
   const d = store.get("scrapeer-draft", {});
   if (d.cap === "50") d.cap = "";  // old default would silently cap rotation at 50
