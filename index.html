@@ -3,6 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#111827">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Scrapeer">
 <title>Scrapeer — find real emails and send</title>
 <meta name="description" content="Paste websites, get the real contact emails, then send personalized emails from your own inbox.">
 <style>
@@ -377,7 +382,7 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;
 // Private data (sent log, already-emailed, do-not-email, drafts, read replies) lives in your account on the server;
 // only harmless UI preferences stay in this browser.
 const SYNCED = {"scrapeer-log": "log", "scrapeer-sent": "sent", "scrapeer-dne": "dne", "scrapeer-draft": "draft", "scrapeer-read": "read", "scrapeer-reply": "reply", "scrapeer-order": "order", "scrapeer-refs": "refs", "scrapeer-sig": "sig", "scrapeer-scrapes": "scrapes", "scrapeer-templates": "templates", "scrapeer-counts": "counts"};
-let state = {}, saveTimer = null, sb = null, signedIn = false;
+let state = {}, saveTimer = null, sb = null, signedIn = false, vapidKey = "";
 const local = {get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
                del(k) { try { localStorage.removeItem(k); } catch {} }};
@@ -1158,11 +1163,24 @@ function startLive() {
   // every 10s while you're looking, every 40s in the background (pop-ups/desktop alerts still arrive)
   let n = 0; liveTimer = setInterval(() => { n++; if (!document.hidden || n % 4 === 0) pollEvents(); if (!$("inbox").hidden) { renderConvos(); if (activeKey) renderThread(); } }, 10000);
 }
+// phone/desktop notifications for new replies, even when the app is closed (server sends them via Web Push)
+const swReady = "serviceWorker" in navigator ? navigator.serviceWorker.register("/sw.js").then(() => navigator.serviceWorker.ready).catch(() => null) : Promise.resolve(null);
+navigator.serviceWorker?.addEventListener("message", e => { if (e.data?.open === "inbox") showTab("inbox"); });
+async function subscribePush() {
+  const reg = await swReady;
+  if (!reg || !reg.pushManager || !vapidKey) return false;
+  const key = Uint8Array.from(atob(vapidKey.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));
+  const sub = await reg.pushManager.getSubscription() || await reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: key}).catch(() => null);
+  if (!sub) return false;
+  return !(await post("/api/me", {action: "push_subscribe", sub: sub.toJSON()}, 1)).error;
+}
 $("alerts").onclick = async () => {
-  if (!("Notification" in window)) return toast("Desktop alerts aren't supported in this browser", "Pop-ups inside the app still work.");
+  if (!("Notification" in window)) return toast("Notifications aren't supported here", /iPhone|iPad/.test(navigator.userAgent) ? "On iPhone: Share → Add to Home Screen, open Scrapeer from there, then tap 🔔 Alerts." : "Pop-ups inside the app still work.");
   const p = await Notification.requestPermission();
   $("alerts").hidden = p === "granted";
-  toast(p === "granted" ? "🔔 Desktop alerts on" : "Desktop alerts blocked", p === "granted" ? "You'll be told when someone opens or replies, even in another tab." : "Allow notifications for this site in your browser settings.");
+  if (p !== "granted") return toast("Notifications blocked", "Allow notifications for this site in your browser or phone settings.");
+  const ok = await subscribePush();
+  toast("🔔 Alerts on", ok ? "You'll get a notification on this device when someone replies, even with the app closed." : "You'll be told while the app is open. (This browser can't get alerts when it's closed.)");
 };
 
 /* ---------- ATTACHMENTS + SIGNATURE ---------- */
@@ -1352,12 +1370,15 @@ async function enterApp(session) {
     $("fill").style.width = "100%"; renderFind();
   }
   $("alerts").hidden = !("Notification" in window) || Notification.permission === "granted";
+  if ("Notification" in window && Notification.permission === "granted") subscribePush();  // keep this device registered
+  if (location.hash === "#inbox") { showTab("inbox"); history.replaceState(null, "", "/"); }  // opened from a notification
   startLive();
 }
 
 (async function boot() {
   setAuthMode(/type=recovery/.test(location.hash) ? "reset" : "signin");  // arrived from a password-reset email
   const cfg = await fetch("/api/config").then(r => r.json()).catch(() => ({}));
+  vapidKey = cfg.vapid || "";
   if (!cfg.url || !cfg.anon || !window.supabase) return showAuth("Sign-in isn't set up yet (the database isn't connected).");
   sb = window.supabase.createClient(cfg.url, cfg.anon);
   sb.auth.onAuthStateChange((event, session) => {

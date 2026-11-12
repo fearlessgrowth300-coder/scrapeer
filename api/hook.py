@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _auth import Bad, db, decrypt, hook_token  # noqa: E402
+from _push import notify  # noqa: E402
 
 KEEP = {"email.delivered", "email.opened", "email.clicked", "email.bounced", "email.complained", "email.received"}
 UUID = re.compile(r"[0-9a-f-]{36}")
@@ -95,6 +96,11 @@ def handle(account_id, headers, raw, token=""):
         "event_id": headers.get("svix-id"), "user_id": rows[0]["user_id"], "account_id": account_id, "type": ev["type"],
         "email_id": d.get("email_id"), "contact": contact, "subject": str(d.get("subject") or "")[:300],
         "at": ev.get("created_at") or d.get("created_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    if ev["type"] == "email.received":  # every service's replies land here (shared reply address), so one place to notify
+        try:
+            notify(rows[0]["user_id"], f"💬 New reply from {contact}", str(d.get("subject") or ""))
+        except Exception:
+            pass  # the reply is saved; a missed notification must not make Resend retry
 
 
 class handler(BaseHTTPRequestHandler):

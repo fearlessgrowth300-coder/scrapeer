@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler
 sys.path.insert(0, os.path.dirname(__file__))
 import base64  # noqa: E402
 from _auth import Bad, _http, db, decrypt, encrypt, hook_token, serve  # noqa: E402
+from _push import push_host_ok  # noqa: E402
 
 NAMES = {"brevo": "Brevo", "mailjet": "Mailjet", "resend": "Resend", "smtp": "Email"}
 FIELDS = ("provider", "api_key", "from", "reply_to", "user", "pass", "from_name", "host", "port", "cap", "domain")
@@ -182,6 +183,15 @@ def handle(body, user):
 
     if action == "remove_account":
         db("DELETE", "scrapeer_accounts", {"id": f"eq.{body.get('id')}", "user_id": f"eq.{user['id']}"}, prefer="return=minimal")
+        return {"ok": True}
+
+    if action == "push_subscribe":  # this phone/browser wants a notification when a reply arrives
+        sub = body.get("sub") or {}
+        ep, keys = str(sub.get("endpoint") or ""), sub.get("keys") or {}
+        if len(ep) > 1000 or not push_host_ok(ep) or not keys.get("p256dh") or not keys.get("auth"):
+            raise Bad("This browser's notification setup isn't supported.")
+        db("POST", "scrapeer_push?on_conflict=endpoint", prefer="return=minimal,resolution=merge-duplicates",
+           body={"endpoint": ep, "user_id": user["id"], "keys": {"p256dh": str(keys["p256dh"])[:200], "auth": str(keys["auth"])[:100]}})
         return {"ok": True}
 
     if action == "ensure_hooks":

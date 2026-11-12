@@ -41,3 +41,14 @@ create table if not exists public.scrapeer_events (
 create index if not exists scrapeer_events_user on public.scrapeer_events (user_id, created_at desc);
 alter table public.scrapeer_events enable row level security;
 revoke all on public.scrapeer_events from anon, authenticated;
+
+-- Phones/browsers that get a notification when a reply arrives (Web Push subscriptions)
+create table if not exists public.scrapeer_push (
+  endpoint   text primary key,
+  user_id    uuid not null references auth.users (id) on delete cascade,
+  keys       jsonb not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists scrapeer_push_user on public.scrapeer_push (user_id);
+alter table public.scrapeer_push enable row level security;
+revoke all on public.scrapeer_push from anon, authenticated;
