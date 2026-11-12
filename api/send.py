@@ -145,7 +145,9 @@ def send_resend(body):
     unsub = reply_to or sender
     text, html = with_extras(body, text)
     payload = {"from": formataddr((one_line(acct.get("from_name"), 80), sender)), "to": [to], "subject": subject,
-               "text": text, "html": html, "headers": {"List-Unsubscribe": f"<mailto:{unsub}?subject=unsubscribe>"}}
+               "text": text, "headers": {}}
+    if not body.get("plain"):
+        payload.update(html=html, headers={"List-Unsubscribe": f"<mailto:{unsub}?subject=unsubscribe>"})
     if body.get("_attach"):
         payload["attachments"] = [{"filename": n, "content": base64.b64encode(b).decode()} for n, _, b in body["_attach"]]
     in_reply_to = one_line(body.get("in_reply_to"), 300)
@@ -242,12 +244,15 @@ def send(body):
         reply_to = str(acct.get("reply_to", "")).strip().lower()
         if EMAIL.fullmatch(reply_to):
             msg["Reply-To"] = reply_to
-        msg["List-Unsubscribe"] = f"<mailto:{reply_to if EMAIL.fullmatch(reply_to) else user}?subject=unsubscribe>"
-        if acct.get("provider") == "mailjet":
+        plain = bool(body.get("plain"))
+        if not plain:
+            msg["List-Unsubscribe"] = f"<mailto:{reply_to if EMAIL.fullmatch(reply_to) else user}?subject=unsubscribe>"
+        if acct.get("provider") == "mailjet" and not plain:
             msg["X-Mailjet-TrackOpen"] = "1"  # Brevo tracks opens on HTML mail by default
         text, html = with_extras(body, text)
         msg.set_content(text)
-        msg.add_alternative(html, subtype="html")
+        if not plain:
+            msg.add_alternative(html, subtype="html")
         for name, ctype, data in body.get("_attach") or []:
             main, _, sub = (ctype if "/" in ctype else "application/octet-stream").partition("/")
             msg.add_attachment(data, maintype=main, subtype=sub, filename=name)

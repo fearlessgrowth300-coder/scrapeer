@@ -313,6 +313,7 @@ input,textarea,select{font-size:16px!important}
         <div class="field"><label for="cap">Overall max per day</label><input type="number" id="cap" placeholder="no extra limit" min="1"></div>
       </div>
       <p class="hint" style="margin-top:-4px">The app rotates through your accounts and stops each one at its daily limit. New domains: start ~50/day and raise it weekly. Keep this tab open while sending.</p>
+      <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="plainmail" checked> Plain email: text only, no logo or open tracking (more likely to reach Inbox, not Promotions)</label>
       <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="freefirst" checked> Send to Gmail/Outlook addresses first (fewer bounces)</label>
       <div class="btns" style="margin-top:12px">
         <button class="ghost" id="send-test">Send test to myself</button>
@@ -818,7 +819,7 @@ $("send-test").onclick = async () => {
   const a = sendingPool().find(x => sentTodayVia(x.label) < x.cap) || sendingPool()[0];
   const me = $("who-email").textContent.trim() || myAddress(a), sample = recipients[pvIdx] || enrich({email: me});
   $("send-test").disabled = true; setMsg("send-msg", `Sending test via ${a.label} to ${me}…`);
-  const m = compose(sample), d = await post("/api/send", {account_id: a.id, to: me, subject: "[TEST] " + m.subject, body: m.body, reply_to: replyAddr(), signature: sigPayload()}, 0);
+  const m = compose(sample), d = await post("/api/send", {account_id: a.id, to: me, subject: "[TEST] " + m.subject, body: m.body, reply_to: replyAddr(), signature: sigPayload(), plain: $("plainmail").checked}, 0);
   $("send-test").disabled = false;
   if (d.error) return setMsg("send-msg", `✗ ${a.label}: ${d.error}`, "err");
   record(me, "test", "", a.label, "[TEST] " + m.subject, m.body, d.message_id);
@@ -861,7 +862,7 @@ $("send-start").onclick = async () => {
     while ((a = pick())) {  // a full or broken account hands the SAME person to the next account
       setMsg("send-msg", `Sending to ${r.email} via ${a.label}…`);
       const m = compose(r);
-      d = await post("/api/send", {account_id: a.id, to: r.email, subject: m.subject, body: m.body, reply_to: replyAddr(), signature: sigPayload()}, 1);
+      d = await post("/api/send", {account_id: a.id, to: r.email, subject: m.subject, body: m.body, reply_to: replyAddr(), signature: sigPayload(), plain: $("plainmail").checked}, 1);
       if (d.error && /daily|limit|quota|exceeded/i.test(d.error)) { full.add(a.id); record(r.email, "failed", "account full today: " + d.error, a.label); continue; }
       if (d.error && /Login refused|connect to|API key|domain|verified|not allowed|suspend/i.test(d.error)) { broken.add(a.id); record(r.email, "failed", "account skipped: " + d.error, a.label); continue; }
       break;
