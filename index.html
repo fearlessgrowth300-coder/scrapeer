@@ -421,7 +421,9 @@ $("tab-find").onclick = () => showTab("find"); $("tab-send").onclick = () => sho
 
 /* ---------- FIND ---------- */
 let results = [], failed = [];
-const siteList = () => [...new Set($("sites").value.split("\n").map(s => s.trim()).filter(Boolean))].slice(0, 500);
+// each line may carry extras ("site.com,@handle", "site.com (https://site.com/)"): keep just the first website on it
+const siteOf = line => (line.match(/https?:\/\/[^\s,()<>"'\[\]]+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s,()<>"'\[\]]*)?/i) || [""])[0].replace(/[.;]+$/, "");
+const siteList = () => [...new Set($("sites").value.split("\n").map(s => s.trim()).map(siteOf).filter(Boolean))].slice(0, 500);
 $("sites").oninput = () => { $("count").textContent = siteList().length + " websites"; };
 const visible = () => {  // results are sorted best-first, so the first one per site is its best email
   const seenSite = new Set();
