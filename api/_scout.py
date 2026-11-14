@@ -39,7 +39,8 @@ ROLE = {"info", "sales", "admin", "contact", "contactus", "hello", "hi", "office
         "wholesale", "partnerships", "partners", "collab", "collabs", "pr", "studio", "events", "returns", "hr"}
 # words that make e.g. "koveasupport@gmail.com" a shared inbox too
 ROLE_PARTS = ("support", "info", "sales", "contact", "hello", "enquir", "inquir", "booking", "order", "service",
-              "admin", "office", "customer", "help", "team", "shop", "store")
+              "admin", "office", "customer", "help", "team", "shop", "store", "web", "media", "press", "market",
+              "partner", "brand", "social", "digital", "online", "group", "ecom", "wholesale", "collab", "studio")
 # machine mailboxes nobody reads
 AUTOMATED = {"billing", "invoice", "invoices", "notification", "notifications", "notify", "mailer-daemon", "postmaster",
              "bounce", "bounces", "alert", "alerts", "newsletter", "unsubscribe", "abuse", "webmaster", "hostmaster",
@@ -109,6 +110,7 @@ def is_junk(email):
     return (domain.rsplit(".", 1)[-1] in NOT_TLD or "@2x" in email or "@3x" in email
             or local in PLACEHOLDER_LOCALS or base_local(local) in AUTOMATED or WRONG_DESK.search(base_local(local))
             or re.fullmatch(r"[0-9a-f]{16,}", local) is not None
+            or (domain in ("gmail.com", "googlemail.com") and len(local.replace(".", "")) < 6)
             or "datenschutz" in domain  # German privacy regulators / outsourced privacy officers
             or re.search(r"\d[a-z]+\d|[bcdfghjklmnpqrstvwxz]{6,}", domain.split(".")[0]) is not None  # e3x9m5b7q2.asia
             or any(domain == v or domain.endswith("." + v) for v in VENDOR_DOMAINS))
@@ -194,9 +196,13 @@ SOURCE_SCORE = {"mailto": 3, "schema": 3, "hidden": 3, "text": 1}
 def score(email, src, pages, site_root, on_contact_page, kind="role", named=False):
     domain = email.split("@")[1]
     s = SOURCE_SCORE[src] + min(pages, 3) + (1 if on_contact_page else 0)
-    own, free = root(domain) == site_root, domain in FREE_MAIL
+    brand, site_brand = root(domain).split(".")[0], site_root.split(".")[0]
+    # octobersveryown.net for octobersveryown.com, celticstudio.com for celticstudio.shop: same company, other ending
+    own, free = root(domain) == site_root or brand == site_brand, domain in FREE_MAIL
     if own:
         s += 4
+    elif len(site_brand) >= 5 and site_brand in brand:
+        s += 1          # mybushbalm.com for bushbalm.com: almost surely theirs
     elif free:
         s += 1          # small businesses often use gmail
     else:
@@ -250,10 +256,13 @@ def scout(site):
         kind = kind_of(local)
         name = person_name(local, site_text) if kind == "person" else ""
         s = score(e, src, n, site_root, contact_pg, kind, bool(name))
+        desk = kind == "role" and bool(SUPPORT.search(base_local(local)))
+        conf = "high" if s >= 7 else "medium" if s >= 4 else "low"
         results.append({
             "email": e, "site": site_root, "score": s,
-            "confidence": "high" if s >= 7 else "medium" if s >= 4 else "low",
-            "type": kind, "first_name": name, "source": src, "found_on": url,
+            # confidence = "good address to pitch": a support desk is real but answered by ticket bots, so never high
+            "confidence": "medium" if desk and conf == "high" else conf,
+            "type": kind, "desk": desk, "first_name": name, "source": src, "found_on": url,
         })
     return {"site": site_root, "pages": len(pages), "emails": sorted(results, key=lambda r: -r["score"])}
 
@@ -284,6 +293,10 @@ def _selfcheck():
     assert not is_junk("hello@acme.com") and not is_junk("partnerships@acme.com") and not is_junk("support@acme.com")
     assert score("hello@acme.com", "mailto", 2, "acme.com", True) > score("support@acme.com", "mailto", 2, "acme.com", True)
     assert score("cs@acme.com", "mailto", 2, "acme.com", True) < score("info@acme.com", "mailto", 2, "acme.com", True)
+    assert is_junk("john@gmail.com") and is_junk("j.o.h.n@gmail.com") and not is_junk("johnsmith@gmail.com") and not is_junk("bob@yahoo.com")
+    assert kind_of("aldoweb") == kind_of("mediainquiries") == kind_of("socialmedia") == "role" and kind_of("sarah") == "person"
+    assert score("info@octobersveryown.net", "mailto", 2, "octobersveryown.com", True) == score("info@octobersveryown.com", "mailto", 2, "octobersveryown.com", True)
+    assert score("team@mybushbalm.com", "text", 1, "bushbalm.com", False) > score("team@agency.com", "text", 1, "bushbalm.com", False)
     print("selfcheck ok")
 
 

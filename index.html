@@ -433,7 +433,7 @@ const visible = () => {  // results are sorted best-first, so the first one per 
     (!$("bestonly").checked || (!seenSite.has(r.site) && seenSite.add(r.site))));
 };
 const toSend = () => visible().filter(r => r.confidence !== "low");
-const typeLabel = r => r.type === "role" ? "shared inbox" : "person" + (r.first_name ? " · " + esc(r.first_name) : "");
+const typeLabel = r => r.type === "role" ? (r.desk ? "support desk" : "shared inbox") : "person" + (r.first_name ? " · " + esc(r.first_name) : "");
 function renderFind() {
   const rows = visible();
   $("found").textContent = rows.length;
