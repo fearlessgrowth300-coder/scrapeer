@@ -55,6 +55,12 @@ VENDOR_DOMAINS = ("wixpress.com", "sentry.io", "squarespace.com", "shopify.com",
 PLACEHOLDER_LOCALS = {"name", "email", "you", "your", "yourname", "youremail", "user", "username", "john.doe",
                       "johndoe", "jane.doe", "janedoe", "firstname", "first.last", "firstname.lastname", "someone",
                       "test", "noreply", "no-reply", "donotreply", "do-not-reply", "example"}
+# real inboxes, but never the person who decides on marketing (privacy@ → "data request" auto-reply, careers@ → HR)
+WRONG_DESK = re.compile(r"privacy|gdpr|dpo|dataprotection|legal|dmca|copyright|compliance|careers|jobs|recruit|hiring|"
+                        r"talent|^hr$|newsletter|subscribe|news$|accessibility|investor|^ir$|security|ethics|fraud|"
+                        r"no\.?-?reply|do\.?-?not\.?-?reply|returns?$")
+# help-desk inboxes: answered by ticket software ("Case 0233 received") and support agents, not decision makers
+SUPPORT = re.compile(r"support|help|service|care|^cs$|custserv|orders?$|tickets?|^returns?|warranty|claims")
 NOT_TLD = ("png", "jpg", "jpeg", "gif", "svg", "webp", "js", "css", "ico", "woff", "woff2", "mp4", "pdf")
 
 
@@ -101,7 +107,7 @@ def base_local(local):
 def is_junk(email):
     local, _, domain = email.partition("@")
     return (domain.rsplit(".", 1)[-1] in NOT_TLD or "@2x" in email or "@3x" in email
-            or local in PLACEHOLDER_LOCALS or base_local(local) in AUTOMATED
+            or local in PLACEHOLDER_LOCALS or base_local(local) in AUTOMATED or WRONG_DESK.search(base_local(local))
             or re.fullmatch(r"[0-9a-f]{16,}", local) is not None
             or "datenschutz" in domain  # German privacy regulators / outsourced privacy officers
             or re.search(r"\d[a-z]+\d|[bcdfghjklmnpqrstvwxz]{6,}", domain.split(".")[0]) is not None  # e3x9m5b7q2.asia
@@ -195,6 +201,8 @@ def score(email, src, pages, site_root, on_contact_page, kind="role", named=Fals
         s += 1          # small businesses often use gmail
     else:
         s -= 3          # another company's domain: often the web designer or a partner
+    if kind == "role" and SUPPORT.search(base_local(email.split("@")[0])):
+        s -= 3          # support desk: the best-per-site pick prefers hello@/info@/partnerships@ over it
     if kind == "person" and (own or free):
         # firstname@theirdomain beats any info@/hello@ (max role bonus is 3+3+1); +1 if the name is on the site
         s += (6 if own else 2) + (1 if named else 0)
@@ -272,6 +280,10 @@ def _selfcheck():
     assert is_junk("3hu3th@dwvtkjcqfz.asia") and is_junk("k1@e3x9m5b7q2.asia") and is_junk("contact@yourstore.com")
     assert is_junk("mark@gamil.com") and is_junk("info@l1-datenschutz.de") and not is_junk("faed.vintage@gmail.com")
     assert not is_junk("info@record98.store") and not is_junk("hello@conjurecoffee.com") and not is_junk("x@strengths.com")
+    assert is_junk("privacy@arcteryx.com") and is_junk("careers@acme.com") and is_junk("newsletter@acme.com") and is_junk("dpo@acme.com")
+    assert not is_junk("hello@acme.com") and not is_junk("partnerships@acme.com") and not is_junk("support@acme.com")
+    assert score("hello@acme.com", "mailto", 2, "acme.com", True) > score("support@acme.com", "mailto", 2, "acme.com", True)
+    assert score("cs@acme.com", "mailto", 2, "acme.com", True) < score("info@acme.com", "mailto", 2, "acme.com", True)
     print("selfcheck ok")
 
 

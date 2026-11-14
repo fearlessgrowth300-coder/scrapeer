@@ -20,6 +20,12 @@ from _push import notify  # noqa: E402
 
 KEEP = {"email.delivered", "email.opened", "email.clicked", "email.bounced", "email.complained", "email.received"}
 UUID = re.compile(r"[0-9a-f-]{36}")
+# keep in sync with AUTO_RE / BOUNCE_RE in index.html
+AUTO = re.compile(r"automatic reply|auto[- ]?reply|^auto:|autosvar|out of (the )?office|away from|acknowledg|case\s*[#:-]?\s*\d{4,}|"
+                  r"ticket\s*[#:-]?\s*\d|\[reques|request (has been )?received|we('ve| have) received|thanks? (you )?for (contacting|reaching|"
+                  r"your (email|message|inquiry|enquiry))|has been received|thanks for joining|welcome to|delivery status|undeliver|"
+                  r"delivery (has )?failed|failure notice|returned mail|mail delivery", re.I)
+BOT_SENDERS = re.compile(r"mailer-daemon|postmaster|no-?reply|do-?not-?reply", re.I)
 
 
 def svix_ok(secret, headers, body, now=None):
@@ -96,7 +102,8 @@ def handle(account_id, headers, raw, token=""):
         "event_id": headers.get("svix-id"), "user_id": rows[0]["user_id"], "account_id": account_id, "type": ev["type"],
         "email_id": d.get("email_id"), "contact": contact, "subject": str(d.get("subject") or "")[:300],
         "at": ev.get("created_at") or d.get("created_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
-    if ev["type"] == "email.received":  # every service's replies land here (shared reply address), so one place to notify
+    if ev["type"] == "email.received" and not AUTO.search(str(d.get("subject") or "")) and not BOT_SENDERS.search(contact):
+        # every service's replies land here (shared reply address), so one place to notify — real replies only
         try:
             notify(rows[0]["user_id"], f"💬 New reply from {contact}", str(d.get("subject") or ""))
         except Exception:

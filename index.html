@@ -349,6 +349,7 @@ input,textarea,select{font-size:16px!important}
         <input type="search" id="ib-search" placeholder="Search people" aria-label="Search conversations">
         <button class="ghost" id="ib-refresh" title="Refresh" aria-label="Refresh">↻</button>
       </div>
+      <label class="hint" style="margin:0 12px 6px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="ib-auto"> Show auto-replies &amp; bounces <span id="ib-auto-n"></span></label>
       <div class="chat-stats" id="ib-stats"></div>
       <div class="msg" id="ib-msg" role="status" style="padding:0 12px"></div>
       <div class="convos" id="ib-convos"></div>
@@ -359,7 +360,8 @@ input,textarea,select{font-size:16px!important}
       <header class="chat-head" id="chat-head" hidden>
         <button class="ghost back" id="chat-back" type="button" aria-label="Back to conversations">←</button>
         <div class="avatar" id="chat-avatar" aria-hidden="true"></div>
-        <div style="min-width:0"><div class="chat-name" id="chat-name"></div><div class="hint" id="chat-sub" style="margin:0"></div></div>
+        <div style="min-width:0;flex:1"><div class="chat-name" id="chat-name"></div><div class="hint" id="chat-sub" style="margin:0"></div></div>
+        <button class="ghost" id="chat-del" type="button" title="Delete this conversation" aria-label="Delete this conversation">🗑</button>
       </header>
       <div class="msgs" id="msgs" hidden aria-live="polite"></div>
       <div class="composer-wrap" id="composer-wrap" hidden>
@@ -381,7 +383,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 // Private data (sent log, already-emailed, do-not-email, drafts, read replies) lives in your account on the server;
 // only harmless UI preferences stay in this browser.
-const SYNCED = {"scrapeer-log": "log", "scrapeer-sent": "sent", "scrapeer-dne": "dne", "scrapeer-draft": "draft", "scrapeer-read": "read", "scrapeer-reply": "reply", "scrapeer-order": "order", "scrapeer-refs": "refs", "scrapeer-sig": "sig", "scrapeer-scrapes": "scrapes", "scrapeer-templates": "templates", "scrapeer-counts": "counts"};
+const SYNCED = {"scrapeer-log": "log", "scrapeer-sent": "sent", "scrapeer-dne": "dne", "scrapeer-draft": "draft", "scrapeer-read": "read", "scrapeer-reply": "reply", "scrapeer-order": "order", "scrapeer-refs": "refs", "scrapeer-sig": "sig", "scrapeer-scrapes": "scrapes", "scrapeer-templates": "templates", "scrapeer-counts": "counts", "scrapeer-hidden": "hidden"};
 let state = {}, saveTimer = null, sb = null, signedIn = false, vapidKey = "";
 const local = {get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
@@ -916,6 +918,15 @@ const chatKey = (accId, email) => accId + "|" + email;
 const serviceOf = c => (accounts.find(a => a.id === c.account_id)?.label || c.via || "").split(" · ")[0] || "Email";
 let convos = new Map(), activeKey = null, bodies = {}, pending = [], inboxTimer = null, inboxBusy = false;
 const readSet = () => new Set(store.get("scrapeer-read", []));
+// help-desk "we got your email" replies, out-of-office, newsletter sign-ups and bounces (keep in sync with AUTO in api/hook.py)
+const AUTO_RE = /automatic reply|auto[- ]?reply|^auto:|autosvar|out of (the )?office|away from|acknowledg|case\s*[#:-]?\s*\d{4,}|ticket\s*[#:-]?\s*\d|\[reques|request (has been )?received|we('ve| have) received|thanks? (you )?for (contacting|reaching|your (email|message|inquiry|enquiry))|has been received|thanks for joining|welcome to/i;
+const BOUNCE_RE = /delivery status|undeliver|delivery (has )?failed|failure notice|returned mail|mail delivery|mailer-daemon|postmaster/i;
+const autoKind = m => BOUNCE_RE.test((m.subject || "") + " " + (m.from || "")) ? "bounce"
+  : AUTO_RE.test(m.subject || "") || /no-?reply|do-?not-?reply/i.test(m.from || "") || AUTO_RE.test(String(bodies[m.id] || "").slice(0, 300)) ? "auto" : "";
+// a chat is "auto" when someone answered but every answer was a machine; a real reply makes it a normal chat again
+const convoAuto = c => { const ins = c.msgs.filter(m => m.dir === "in"); return ins.length && ins.every(autoKind) ? (ins.some(m => autoKind(m) === "bounce") ? "bounce" : "auto") : ""; };
+// deleted chats stay gone until that person writes again
+const isDeleted = c => (store.get("scrapeer-hidden", {})[c.key] || 0) >= c.last.at;
 const unreadTotal = () => [...convos.values()].reduce((n, c) => n + c.unread, 0);
 
 async function loadInbox(quiet) {
@@ -965,19 +976,20 @@ async function loadInbox(quiet) {
     const best = pick?.c;
     const c = best || convo(r.account_id, from);
     c.name = nameOf(r.from) || c.name;
-    c.msgs.push({id: r.id, dir: "in", key: r.key, account_id: r.account_id, subject: r.subject, at, message_id: r.message_id});
+    c.msgs.push({id: r.id, dir: "in", key: r.key, account_id: r.account_id, subject: r.subject, at, message_id: r.message_id, from: r.from});
   }
   const read = readSet();
   for (const c of map.values()) {
     c.msgs.sort((a, b) => a.at - b.at); c.last = c.msgs[c.msgs.length - 1];
-    c.unread = c.msgs.filter(m => m.dir === "in" && !read.has(m.id)).length;
+    c.unread = c.msgs.filter(m => m.dir === "in" && !read.has(m.id) && !autoKind(m)).length;
   }
+  for (const [k, c] of map) if (isDeleted(c)) map.delete(k);
   convos = map;
   { const u = unreadTotal(); $("ib-badge").textContent = u; $("ib-badge").hidden = !u; }
   const outs = [...map.values()].flatMap(c => { const st = statuses(c); return c.msgs.filter(m => m.dir === "out" && !String(m.id).startsWith("tmp")).map(m => st.get(m)); });
   const count = k => outs.filter(s => k.includes(s)).length;
   $("ib-stats").innerHTML = [["Sent", outs.length], ["Delivered", count(["delivered", "opened", "clicked"])], ["Opened", count(["opened", "clicked"])],
-    ["Replied", [...map.values()].filter(c => c.msgs.some(m => m.dir === "in")).length], ["Bounced/spam", count(["bounced", "complained", "failed"])]]
+    ["Replied", [...map.values()].filter(c => c.msgs.some(m => m.dir === "in" && !autoKind(m))).length], ["Bounced/spam", count(["bounced", "complained", "failed"])]]
     .map(([l, v]) => `<span><b>${v}</b> ${l}</span>`).join("");
   renderConvos();
   if (activeKey && convos.has(activeKey)) { renderThread(); fetchBodies(); }
@@ -987,16 +999,28 @@ $("ib-search").oninput = renderConvos;
 
 function renderConvos() {
   const q = $("ib-search").value.trim().toLowerCase();
+  const showAuto = $("ib-auto").checked, nAuto = [...convos.values()].filter(convoAuto).length;
+  $("ib-auto-n").textContent = nAuto ? `(${nAuto})` : "";
   const list = [...convos.values()].filter(c => !q || c.email.includes(q) || c.name.toLowerCase().includes(q) || serviceOf(c).toLowerCase().includes(q))
+    .filter(c => showAuto || !convoAuto(c) || c.key === activeKey)
     .sort((a, b) => b.last.at - a.last.at);
   $("ib-convos").innerHTML = list.map(c => {
     const l = c.last, prev = bodies[l.id] || l.text || l.subject || (l.dir === "in" ? "New reply" : ""), st = statuses(c);
     return `<button type="button" class="convo${c.unread ? " has-unread" : ""}" data-key="${esc(c.key)}" aria-current="${c.key === activeKey}">
       <div class="avatar${isReading(c) ? " live" : ""}" aria-hidden="true">${esc(c.name[0].toUpperCase())}</div>
-      <div class="convo-body"><div class="convo-top"><span class="convo-name">${esc(c.name)} <span class="hint" style="margin:0;font-weight:400">· ${esc(serviceOf(c))}</span></span><span class="convo-time">${l.at ? listTime(l.at) : ""}</span></div>
+      <div class="convo-body"><div class="convo-top"><span class="convo-name">${esc(c.name)} <span class="hint" style="margin:0;font-weight:400">· ${esc(serviceOf(c))}</span></span><span class="convo-time">${{auto: "🤖 Auto-reply · ", bounce: "⚠ Bounced · "}[convoAuto(c)] || ""}${l.at ? listTime(l.at) : ""}</span></div>
       <div class="convo-bottom"><span class="convo-prev">${isReading(c) ? '<span class="reading">👀 Reading now</span> · ' : ""}${l.dir === "out" ? (TICK[st.get(l)] || "✓") + " " : ""}${esc(String(prev).split("\n")[0])}</span>${c.unread ? `<span class="unread">${c.unread}</span>` : ""}</div></div></button>`;
   }).join("") || `<p class="empty" style="padding:30px 12px">${q ? "No matches." : "No conversations yet — people you email show up here."}</p>`;
 }
+$("ib-auto").onchange = renderConvos;
+$("chat-del").onclick = () => {
+  const c = convos.get(activeKey); if (!c || !confirm(`Delete the conversation with ${c.name}?\nIt comes back only if they write again. (It stays in your email provider's records.)`)) return;
+  store.set("scrapeer-hidden", {...store.get("scrapeer-hidden", {}), [c.key]: c.last.at});
+  convos.delete(c.key); activeKey = null; $("chat").classList.remove("open");
+  for (const id of ["chat-head", "msgs", "composer-wrap"]) $(id).hidden = true; $("chat-empty").hidden = false;
+  { const u = unreadTotal(); $("ib-badge").textContent = u; $("ib-badge").hidden = !u; }
+  renderConvos(); toast("🗑 Conversation deleted", c.email);
+};
 $("ib-convos").onclick = e => { const b = e.target.closest("[data-key]"); if (b) openConvo(b.dataset.key); };
 
 function openConvo(key) {
@@ -1037,7 +1061,7 @@ function renderThread(scroll) {
 
 async function fetchBodies() {
   const c = convos.get(activeKey); if (!c) return;
-  const items = c.msgs.filter(m => m.key != null && !(m.id in bodies)).slice(-40).map(m => ({id: m.id, key: m.key, dir: m.dir}));
+  const items = c.msgs.filter(m => m.key != null && !(m.id in bodies)).slice(-40).map(m => ({id: m.id, key: m.key, dir: m.dir}));  // bodies also feed autoKind
   if (!items.length) return;
   const d = await post("/api/track", {action: "bodies", items}, 1);
   if (d.bodies) { Object.assign(bodies, d.bodies); if (activeKey === c.key) renderThread(); renderConvos(); }

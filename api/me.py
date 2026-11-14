@@ -21,7 +21,7 @@ from _push import push_host_ok  # noqa: E402
 NAMES = {"brevo": "Brevo", "mailjet": "Mailjet", "resend": "Resend", "smtp": "Email"}
 FIELDS = ("provider", "api_key", "from", "reply_to", "user", "pass", "from_name", "host", "port", "cap", "domain")
 PUBLIC = ("from", "reply_to", "from_name", "domain")  # safe to send back to the browser
-STATE_KEYS = ("log", "sent", "dne", "draft", "read", "reply", "order", "refs", "sig", "scrapes", "templates", "counts")
+STATE_KEYS = ("log", "sent", "dne", "draft", "read", "reply", "order", "refs", "sig", "scrapes", "templates", "counts", "hidden")
 APP_URL = os.environ.get("APP_URL", "https://scrapeer-brown.vercel.app").rstrip("/")
 HOOK_EVENTS = ["email.bounced", "email.clicked", "email.complained", "email.delivered", "email.opened", "email.received"]
 
@@ -145,6 +145,8 @@ def merge_state(cur, new):
     out["refs"] = dict(list({**(cur.get("refs") or {}), **(new.get("refs") or {})}.items())[-500:])
     cc, nc = cur.get("counts") or {}, new.get("counts") or {}  # ponytail: max per day+sender, two tabs sending at once can undercount
     out["counts"] = {k: max(cc.get(k, 0), nc.get(k, 0)) for k in {**cc, **nc}}
+    ch, nh = cur.get("hidden") or {}, new.get("hidden") or {}
+    out["hidden"] = dict(list({k: max(ch.get(k, 0), nh.get(k, 0)) for k in {**ch, **nh}}.items())[-3000:])
     out["read"] = list(dict.fromkeys((cur.get("read") or []) + (new.get("read") or [])))[-5000:]
     return out
 
