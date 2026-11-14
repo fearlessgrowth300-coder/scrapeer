@@ -314,7 +314,7 @@ input,textarea,select{font-size:16px!important}
     <div class="card">
       <h2>4. Send</h2>
       <div class="row2">
-        <div class="field"><label for="delay">Wait between emails (seconds)</label><input type="text" id="delay" value="15-30"></div>
+        <div class="field"><label for="delay">Wait between emails (seconds)</label><input type="text" id="delay" value="60-120"></div>
         <div class="field"><label for="cap">Overall max per day</label><input type="number" id="cap" placeholder="no extra limit" min="1"></div>
       </div>
       <p class="hint" style="margin-top:-4px">The app rotates through your accounts and stops each one at its daily limit. New domains: start ~50/day and raise it weekly. Keep this tab open while sending.</p>
@@ -854,7 +854,7 @@ $("send-start").onclick = async () => {
   if (!queue.length) return setMsg("send-msg", "No one left to email (everyone is already emailed or on the do-not-email list).", "err");
   if ($("freefirst").checked) queue.sort((a, b) => isFreeMail(b.email) - isFreeMail(a.email));
   const problem = checkReady(queue[0]); if (problem) return setMsg("send-msg", problem, "err");
-  const [lo, hi] = ($("delay").value.match(/\d+/g) || [15, 30]).map(Number), cap = Number($("cap").value) || Infinity;
+  const [lo, hi] = ($("delay").value.match(/\d+/g) || [60, 120]).map(Number), cap = Number($("cap").value) || Infinity;
   const pool = sendingPool(), full = new Set(), broken = new Set();
   if (!confirm(`Send to ${queue.length} people? Uses ${pool[0].label} first; when it's full for the day the next account takes over.`)) return;
   sending = true; $("send-start").disabled = $("send-test").disabled = true; $("send-stop").disabled = false;
@@ -1305,6 +1305,7 @@ function restoreUI() {
   const d = store.get("scrapeer-draft", {});
   if (d.cap === "50") d.cap = "";  // old default would silently cap rotation at 50
   for (const k of ["recips", "subject", "body", "footer", "delay", "cap"]) if (d[k] != null) $(k).value = d[k];
+  if (d.delay === "15-30") $("delay").value = "60-120";  // old default: too fast for a new domain
   $("dne").value = store.get("scrapeer-dne", "");
   const acc = local.get("scrapeer-acc", null);
   if (acc) for (const k of ACC) if (acc[k] != null && acc[k] !== "" && k !== "key" && k !== "pass") $("acc-" + k).value = acc[k];
