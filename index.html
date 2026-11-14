@@ -432,11 +432,15 @@ const visible = () => {  // results are sorted best-first, so the first one per 
   return results.filter(r => ($("showlow").checked || r.confidence !== "low") &&
     (!$("bestonly").checked || (!seenSite.has(r.site) && seenSite.add(r.site))));
 };
+const toSend = () => visible().filter(r => r.confidence !== "low");
 const typeLabel = r => r.type === "role" ? "shared inbox" : "person" + (r.first_name ? " · " + esc(r.first_name) : "");
 function renderFind() {
   const rows = visible();
   $("found").textContent = rows.length;
-  $("copy").disabled = $("csv").disabled = $("tosend").disabled = !rows.length;
+  $("copy").disabled = $("csv").disabled = !rows.length;
+  const n = toSend().length;  // low confidence is only for looking at: never emailed
+  $("tosend").disabled = !n; $("tosend").textContent = n ? `Send to these ${n} →` : "Send to these →";
+  $("tosend").title = rows.length > n ? `${rows.length - n} low-confidence email(s) won't be sent` : "";
   $("rows").innerHTML = rows.length ? rows.map(r => `<tr><td class="email">${esc(r.email)}</td>
     <td><span class="pill ${r.confidence}">${r.confidence}</span></td><td>${typeLabel(r)}</td><td>${esc(r.site)}</td>
     <td><a href="${esc(r.found_on)}" target="_blank" rel="noopener noreferrer">${esc(r.found_on.replace(/^https?:\/\//, ""))}</a></td></tr>`).join("")
@@ -490,7 +494,7 @@ $("copy").onclick = async () => {
 $("csv").onclick = () => download("scrapeer_emails_" + today() + ".csv", visible(), ["email", "confidence", "type", "first_name", "site", "source", "found_on"]);
 $("tosend").onclick = async () => {
   // read each store (name, a product it sells, its niche) so every email can mention something real
-  const rows = visible(), sites = [...new Set(rows.map(r => r.site))], info = {}, queue = [...sites], label = $("tosend").textContent;
+  const rows = toSend(), sites = [...new Set(rows.map(r => r.site))], info = {}, queue = [...sites], label = $("tosend").textContent;
   $("tosend").disabled = true;
   const worker = async () => { while (queue.length) { const s = queue.shift(); info[s] = await post("/api/store", {site: s}, 1);
     $("tosend").textContent = `Reading stores ${sites.length - queue.length}/${sites.length}…`; } };
