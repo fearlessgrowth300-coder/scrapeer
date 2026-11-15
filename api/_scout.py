@@ -38,7 +38,9 @@ ROLE = {"info", "sales", "admin", "contact", "contactus", "hello", "hi", "office
         "enquiries", "inquiries", "enquiry", "inquiry", "booking", "bookings", "orders", "order", "service", "mail",
         "careers", "jobs", "press", "media", "marketing", "general", "reception", "privacy", "legal", "accounts",
         "owner", "ceo", "founder", "boss", "manager", "shop", "store", "customerservice", "customercare", "care",
-        "wholesale", "partnerships", "partners", "collab", "collabs", "pr", "studio", "events", "returns", "hr"}
+        "wholesale", "partnerships", "partners", "collab", "collabs", "pr", "studio", "events", "returns", "hr",
+        "cs", "cx", "ce", "hq", "ops", "biz", "b2b", "mkt", "comment", "comments", "feedback", "atendimento", "hola",
+        "halo", "kontakt", "contacto", "ventas", "vendas"}
 # words that make e.g. "koveasupport@gmail.com" a shared inbox too
 ROLE_PARTS = ("support", "info", "sales", "contact", "hello", "enquir", "inquir", "booking", "order", "service",
               "admin", "office", "customer", "help", "team", "shop", "store", "web", "media", "press", "market",
@@ -63,7 +65,7 @@ WRONG_DESK = re.compile(r"privacy|gdpr|dpo|dataprotection|legal|dmca|copyright|c
                         r"talent|^hr$|newsletter|subscribe|news$|accessibility|investor|^ir$|security|ethics|fraud|"
                         r"no\.?-?reply|do\.?-?not\.?-?reply|returns?$")
 # help-desk inboxes: answered by ticket software ("Case 0233 received") and support agents, not decision makers
-SUPPORT = re.compile(r"support|help|service|care|^cs$|custserv|orders?$|tickets?|^returns?|warranty|claims")
+SUPPORT = re.compile(r"support|help|service|care|^c[sx]$|custserv|orders?$|tickets?|^returns?|warranty|claims|atendimento|feedback")
 NOT_TLD = ("png", "jpg", "jpeg", "gif", "svg", "webp", "js", "css", "ico", "woff", "woff2", "mp4", "pdf")
 
 
@@ -295,6 +297,8 @@ def _selfcheck():
     assert not is_junk("hello@acme.com") and not is_junk("partnerships@acme.com") and not is_junk("support@acme.com")
     assert score("hello@acme.com", "mailto", 2, "acme.com", True) > score("support@acme.com", "mailto", 2, "acme.com", True)
     assert score("cs@acme.com", "mailto", 2, "acme.com", True) < score("info@acme.com", "mailto", 2, "acme.com", True)
+    assert kind_of("cs") == kind_of("cx") == kind_of("hola") == "role" and SUPPORT.search("cx")
+    assert score("cs@acme.com", "mailto", 3, "acme.com", True) < score("hello@acme.com", "mailto", 3, "acme.com", True)
     assert is_junk("john@gmail.com") and is_junk("j.o.h.n@gmail.com") and not is_junk("johnsmith@gmail.com") and not is_junk("bob@yahoo.com")
     assert kind_of("aldoweb") == kind_of("mediainquiries") == kind_of("socialmedia") == "role" and kind_of("sarah") == "person"
     assert score("info@octobersveryown.net", "mailto", 2, "octobersveryown.com", True) == score("info@octobersveryown.com", "mailto", 2, "octobersveryown.com", True)
