@@ -796,9 +796,13 @@ const onePerStore = list => { const seen = new Set(); return list.filter(r => { 
 let log = [];  // loaded from your account after sign-in
 function record(email, status, note, via, subj, body, mid, att) {
   log.unshift({when: new Date().toLocaleString(), date: today(), ts: Date.now(), email, status, note: note || "", via: via || "",
-               ...(subj ? {subj: String(subj).slice(0, 200)} : {}), ...(body ? {snip: String(body).slice(0, 300)} : {}),
+               ...(subj ? {subj: String(subj).slice(0, 200)} : {}), ...(body ? {snip: String(body).slice(0, 3000)} : {}),
                ...(mid ? {mid: String(mid).toLowerCase()} : {}), ...(att && att.length ? {att} : {})});
-  log = log.slice(0, 3000); store.set("scrapeer-log", log);
+  log = log.slice(0, 3000);
+  // Mailjet/Brevo/Gmail can't give sent emails back, so the chat shows what we saved: keep the full text for the
+  // latest 400 emails, older ones shrink to a preview so the saved data stays small. ponytail: chats older than that show a preview
+  for (const e of log.slice(400)) if (e.snip && e.snip.length > 300) e.snip = e.snip.slice(0, 300) + "…";
+  store.set("scrapeer-log", log);
   if (status === "sent") { const s = sentMap(); s[email] = today(); store.set("scrapeer-sent", s);
     const c = store.get("scrapeer-counts", {}), k = today() + "|" + (via || ""); c[k] = (c[k] || 0) + 1; store.set("scrapeer-counts", c); }
   renderLog(); renderAccounts();
