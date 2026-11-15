@@ -290,6 +290,10 @@ input,textarea,select{font-size:16px!important}
         <div style="display:flex;gap:6px;flex-wrap:wrap"><select id="tpl" style="flex:1;min-width:0;border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:var(--bg);color:var(--ink);font:14px system-ui,sans-serif"></select>
         <button class="ghost" type="button" id="tpl-save">Save as template</button><button class="ghost" type="button" id="tpl-del" disabled>Delete</button></div>
         <p class="hint">Pick one and it fills the subject and message. Store details like {{store}} fill in for each email.</p></div>
+      <div class="field"><label>Template rounds (optional)</label>
+        <div id="plan"></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="ghost" type="button" id="plan-add">+ Add a round</button><button class="ghost" type="button" id="plan-reset" hidden>Reset progress</button></div>
+        <p class="hint" id="plan-hint"></p></div>
       <div class="field"><label for="subject">Subject</label><input type="text" id="subject" placeholder="Quick question about {{company}}"></div>
       <div class="field"><label for="body">Message</label>
         <textarea id="body" placeholder="Hi {{first_name|there}},&#10;&#10;I came across {{site}} and..."></textarea>
@@ -547,7 +551,7 @@ function parseRecips() {
   const seen = new Set();
   recipients = list.filter(r => r.email && EMAIL_RE.test(r.email = r.email.toLowerCase()) && !seen.has(r.email) && seen.add(r.email)).map(enrich);
   const blocked = dneSet(), stores = sentStores();
-  const ready = onePerStore(recipients.filter(r => !blocked.has(r.email) && !alreadyDone(r, stores))).length;
+  const ready = assignPlan(onePerStore(recipients.filter(r => !blocked.has(r.email) && !alreadyDone(r, stores)))).length;
   $("recips-count").textContent = `${recipients.length} recipients · ${ready} will be emailed` +
     (recipients.length - ready ? ` · ${recipients.length - ready} skipped (store already emailed, 2nd address of the same store, or do-not-email)` : "");
   renderChips(); pvIdx = 0; renderPreview();
@@ -569,7 +573,8 @@ function fill(tpl, r) {
 }
 function compose(r) {
   const footer = $("footer").value.trim();
-  return {subject: fill($("subject").value, r).trim(), body: fill($("body").value, r).trim() + (footer ? "\n\n" + footer : "")};
+  const t = r.tpl || {subject: $("subject").value, body: $("body").value};
+  return {subject: fill(t.subject, r).trim(), body: fill(t.body, r).trim() + (footer ? "\n\n" + footer : "")};
 }
 function renderChips() {
   const keys = new Set(["first_name", "company", "site"]); recipients.slice(0, 20).forEach(r => Object.keys(r).forEach(k => keys.add(k)));
@@ -829,7 +834,7 @@ $("log-clear").onclick = async () => {
 function checkReady(r) {
   const m = compose(r);
   if (!sendingPool().length) return "Add a sending account in step 1 first.";
-  if (!m.subject || !$("body").value.trim()) return "Write a subject and message first.";
+  if (!m.subject || !(r.tpl ? r.tpl.body : $("body").value).trim()) return r.tpl ? `Template "${r.tpl.name}" has no subject or message.` : "Write a subject and message first.";
   if (/\{\{/.test(m.subject + m.body)) return "A {{field}} isn't filled in — check the preview.";
   if (m.body.includes("[change this")) return "Change the [change this to what you do] part of the message first.";
   return "";
@@ -856,13 +861,18 @@ const sleep = ms => new Promise(res => { const t = setTimeout(res, ms); wake = (
 $("send-stop").onclick = () => { sending = false; wake?.(); };
 $("send-start").onclick = async () => {
   parseRecips();
-  const blocked = dneSet(), stores = sentStores(), queue = onePerStore(recipients.filter(r => !blocked.has(r.email) && !alreadyDone(r, stores)));
-  if (!queue.length) return setMsg("send-msg", "No one left to email (everyone is already emailed or on the do-not-email list).", "err");
-  if ($("freefirst").checked) queue.sort((a, b) => isFreeMail(b.email) - isFreeMail(a.email));
-  const problem = checkReady(queue[0]); if (problem) return setMsg("send-msg", problem, "err");
+  const blocked = dneSet(), stores = sentStores(), all = onePerStore(recipients.filter(r => !blocked.has(r.email) && !alreadyDone(r, stores)));
+  if ($("freefirst").checked) all.sort((a, b) => isFreeMail(b.email) - isFreeMail(a.email));
+  const missing = plan.find(p => !templates().some(t => t.name === p.tpl));
+  if (missing) return setMsg("send-msg", `Template "${missing.tpl}" in your rounds was deleted — pick another one.`, "err");
+  const queue = assignPlan(all);
+  if (!queue.length) return setMsg("send-msg", plan.length ? "Every round is already done — add a round or press Reset progress." : "No one left to email (everyone is already emailed or on the do-not-email list).", "err");
+  for (const r of plan.length ? [...new Map(queue.map(r => [r.tpl.name, r])).values()] : [queue[0]]) {  // one check per template used
+    const problem = checkReady(r); if (problem) return setMsg("send-msg", problem, "err"); }
   const [lo, hi] = ($("delay").value.match(/\d+/g) || [60, 120]).map(Number), cap = Number($("cap").value) || Infinity;
   const pool = sendingPool(), full = new Set(), broken = new Set();
-  if (!confirm(`Send to ${queue.length} people? Uses ${pool[0].label} first; when it's full for the day the next account takes over.`)) return;
+  const rounds = plan.length ? "\n\n" + plan.map((p, n) => `Round ${n + 1}: "${p.tpl}" → ${queue.filter(r => r.round === p).length} people`).join("\n") : "";
+  if (!confirm(`Send to ${queue.length} people? Uses ${pool[0].label} first; when it's full for the day the next account takes over.${rounds}`)) return;
   sending = true; $("send-start").disabled = $("send-test").disabled = true; $("send-stop").disabled = false;
   let sent = 0, fails = 0, done = 0, consecutiveFails = 0, stopReason = "", i = 0;
   const runSent = [];
@@ -897,7 +907,8 @@ $("send-start").onclick = async () => {
       fails++; consecutiveFails++; record(r.email, "failed", d.error, a.label);
       if (consecutiveFails >= 5) { stopReason = "Stopped after 5 failures in a row: " + d.error; break; }
     } else { sent++; runSent.push(r.email); consecutiveFails = 0; { const m = compose(r); record(r.email, "sent", "", a.label, m.subject, m.body, d.message_id);
-      if (host(r.site)) { const s = sentMap(); s["site:" + host(r.site)] = today(); store.set("scrapeer-sent", s); } } }
+      if (host(r.site)) { const s = sentMap(); s["site:" + host(r.site)] = today(); store.set("scrapeer-sent", s); }
+      if (r.round) { r.round.done = (r.round.done || 0) + 1; saveDraft(); renderPlan(); } } }
     i++; done++;
     $("st-sent").textContent = sent; $("st-failed").textContent = fails; $("send-fill").style.width = (100 * done / queue.length) + "%";
     if (done < queue.length && sending) {
@@ -1277,9 +1288,47 @@ Quick question: is it getting steady sales yet, or is traffic still slow?
 
 I help stores like yours get more sales [change this to what you do]. Happy to send 2-3 ideas for {{store|your store}} if useful.`};
 const templates = () => [STARTER, ...store.get("scrapeer-templates", [])];
+// template rounds: [{tpl: name, count, done}] — round 1 goes to the first `count` people, then round 2, ...
+// `done` survives reloads, so pressing Start tomorrow carries on in the right round
+let plan = [];
+function assignPlan(list) {
+  list.forEach(r => { delete r.tpl; delete r.round; });
+  if (!plan.length) return list;
+  const T = templates(), out = []; let i = 0;
+  for (const p of plan) {
+    const t = T.find(x => x.name === p.tpl); let left = Math.max(0, (+p.count || 0) - (p.done || 0));
+    while (t && left-- > 0 && i < list.length) { const r = list[i++]; r.tpl = t; r.round = p; out.push(r); }
+  }
+  return out;  // people past the last round aren't emailed
+}
+function renderPlan() {
+  const names = templates().map(t => t.name);
+  $("plan").innerHTML = plan.map((p, i) => `<div data-i="${i}" style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+    <span class="hint" style="margin:0;min-width:18px">${i + 1}.</span>
+    <select data-f="tpl" aria-label="Template for round ${i + 1}" style="flex:1;min-width:0;border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:var(--bg);color:var(--ink);font:14px system-ui,sans-serif">${names.map(n => `<option value="${esc(n)}"${n === p.tpl ? " selected" : ""}>${esc(n)}</option>`).join("")}${names.includes(p.tpl) ? "" : `<option selected value="${esc(p.tpl)}">⚠ ${esc(p.tpl)} (deleted)</option>`}</select>
+    <input data-f="count" type="number" min="1" value="${+p.count || 0}" aria-label="How many people get round ${i + 1}" style="width:80px">
+    <span class="hint" style="margin:0;white-space:nowrap">${p.done || 0}/${+p.count || 0} sent</span>
+    <button class="ghost" type="button" data-f="del" aria-label="Remove round ${i + 1}">✕</button></div>`).join("");
+  $("plan-reset").hidden = !plan.some(p => p.done);
+  const total = plan.reduce((n, p) => n + (+p.count || 0), 0);
+  $("plan-hint").textContent = plan.length ? `${plan.length} round(s), ${total} emails in total. The subject and message boxes below aren't used while rounds are set, and anyone past the last round isn't emailed.`
+    : "Leave empty to send the message below to everyone. Add rounds to send one saved template to the first 100 people, the next template to the next 300, and so on.";
+}
+const planChanged = () => { saveDraft(); renderPlan(); parseRecips(); };
+$("plan").onchange = e => { const row = e.target.closest("[data-i]"), p = row && plan[+row.dataset.i]; if (!p) return;
+  if (e.target.dataset.f === "tpl") p.tpl = e.target.value;
+  if (e.target.dataset.f === "count") p.count = Math.max(1, parseInt(e.target.value, 10) || 1);
+  planChanged(); };
+$("plan").onclick = e => { if (e.target.dataset.f !== "del") return; plan.splice(+e.target.closest("[data-i]").dataset.i, 1); planChanged(); };
+$("plan-add").onclick = () => { const saved = store.get("scrapeer-templates", []);
+  if (!saved.length) return setMsg("send-msg", "Save at least one template first (write a message, then Save as template).", "err");
+  plan.push({tpl: saved[Math.min(plan.length, saved.length - 1)].name, count: 100, done: 0}); planChanged(); };
+$("plan-reset").onclick = () => { if (!confirm("Start every round from 0 again? (People already emailed are still never emailed twice.)")) return;
+  plan.forEach(p => p.done = 0); planChanged(); };
 function renderTemplates(pick = "") {
   $("tpl").innerHTML = '<option value="">Choose a template…</option>' + templates().map((t, n) => `<option value="${n}">${esc(t.name)}</option>`).join("");
   $("tpl").value = pick; $("tpl-del").disabled = !(+$("tpl").value > 0);
+  renderPlan();
 }
 $("tpl").onchange = () => {
   const t = templates()[$("tpl").value]; $("tpl-del").disabled = !(+$("tpl").value > 0);
@@ -1304,7 +1353,7 @@ $("tpl-del").onclick = () => {
   store.set("scrapeer-templates", store.get("scrapeer-templates", []).filter(x => x.name !== t.name)); renderTemplates();
 };
 function saveDraft() { store.set("scrapeer-draft", {recips: $("recips").value, subject: $("subject").value, body: $("body").value,
-  footer: $("footer").value, delay: $("delay").value, cap: $("cap").value}); }
+  footer: $("footer").value, delay: $("delay").value, cap: $("cap").value, plan}); }
 function restoreUI() {
   log = store.get("scrapeer-log", []);
   if (!Object.keys(store.get("scrapeer-counts", {})).length && log.length) store.set("scrapeer-counts", countsFromLog(log));  // first load: build from history
@@ -1312,6 +1361,7 @@ function restoreUI() {
   const d = store.get("scrapeer-draft", {});
   if (d.cap === "50") d.cap = "";  // old default would silently cap rotation at 50
   for (const k of ["recips", "subject", "body", "footer", "delay", "cap"]) if (d[k] != null) $(k).value = d[k];
+  plan = Array.isArray(d.plan) ? d.plan.filter(p => p && p.tpl) : []; renderPlan();
   if (d.delay === "15-30") $("delay").value = "60-120";  // old default: too fast for a new domain
   $("dne").value = store.get("scrapeer-dne", "");
   const acc = local.get("scrapeer-acc", null);
