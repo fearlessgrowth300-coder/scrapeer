@@ -25,8 +25,10 @@ HREF = re.compile(r"<a\b[^>]*href=[\"']([^\"'#]+)[\"'][^>]*>(.*?)</a>", re.I | r
 CONTACT_WORDS = re.compile(r"contact|about|team|staff|people|impressum|imprint|kontakt|get.in.touch|reach.us|"
                            r"support|legal|privacy|policies|leadership|who-we-are", re.I)
 FALLBACK_PATHS = ("contact", "contact-us", "about", "about-us", "pages/contact", "pages/about",
-                  "policies/privacy-policy", "policies/contact-information", "privacy-policy", "impressum")
-MAX_PAGES = 12
+                  "policies/privacy-policy", "policies/contact-information", "privacy-policy", "impressum",
+                  # small Shopify stores often put the owner's own Gmail in these
+                  "policies/terms-of-service", "policies/refund-policy", "policies/shipping-policy", "policies/legal-notice")
+MAX_PAGES = 16
 TIMEOUT = 8
 
 FREE_MAIL = {"gmail.com", "googlemail.com", "yahoo.com", "outlook.com", "hotmail.com", "live.com", "icloud.com",
