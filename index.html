@@ -568,8 +568,13 @@ $("dne").oninput = () => { store.set("scrapeer-dne", $("dne").value); parseRecip
 // store data often has emojis and SHOUTING CAPS ("🎁 MARY'S QUILT"): both read as marketing to Gmail → Promotions
 const tidy = v => { const s = String(v ?? "").replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}\u{2122}\u{00AE}\u{00A9}]/gu, "").replace(/\s{2,}/g, " ").trim();
   return /[a-z]/.test(s) || !/[A-Z]{4}/.test(s) ? s : s.toLowerCase().replace(/(^|[\s\-/(])(\p{L})/gu, (m, p, c) => p + c.toUpperCase()); };
+const NOT_A_NAME = /^(my ?shopify|shopify|wix|squarespace|bigcommerce|woocommerce|wordpress|home( ?page)?|welcome|online ?store|store|shop|index|untitled|coming soon|password|opening soon|default store|404|page not found|just a moment\.*|access denied|attention required.*)$/i;
+const siteName = r => { const h = String(r.site || r.email.split("@")[1] || "").replace(/^https?:\/\//, "").replace(/^www\./, "").split(/[./]/)[0]; return h ? h[0].toUpperCase() + h.slice(1) : ""; };
 function fill(tpl, r) {
-  return tpl.replace(/\{\{\s*([\w ]+?)\s*(?:\|([^}]*))?\}\}/g, (_, k, dflt) => tidy(r[k.trim().toLowerCase().replace(/\s+/g, "_")]) || (dflt ?? "").trim());
+  return tpl.replace(/\{\{\s*([\w ]+?)\s*(?:\|([^}]*))?\}\}/g, (_, k, dflt) => {
+    const key = k.trim().toLowerCase().replace(/\s+/g, "_"); let v = tidy(r[key]);
+    if (key === "store" && v && NOT_A_NAME.test(v)) v = r.site ? siteName(r) : "";  // "Myshopify" → the website's name
+    return v || (dflt ?? "").trim(); });
 }
 function compose(r) {
   const footer = $("footer").value.trim();

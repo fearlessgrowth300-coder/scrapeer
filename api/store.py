@@ -28,6 +28,12 @@ def short(title, words=6):
     return " ".join(cut)
 
 
+# names a page carries that aren't the store's (platform names, generic page titles): use the website name instead
+NOT_A_NAME = re.compile(r"^(my ?shopify|shopify|wix|squarespace|bigcommerce|woocommerce|wordpress|home( ?page)?|welcome|"
+                        r"online ?store|store|shop|index|untitled|coming soon|password|opening soon|default store|"
+                        r"404|page not found|just a moment\.*|access denied|attention required.*)$", re.I)
+
+
 def store_name(page, site):
     m = (re.search(r'property=["\']og:site_name["\'][^>]*content=["\']([^"\']+)', page, re.I)
          or re.search(r"<title[^>]*>([^<]+)", page, re.I))
@@ -36,7 +42,7 @@ def store_name(page, site):
         raw = htmllib.unescape(m.group(1))
         name = " ".join(raw.split()[:5]) if "site_name" in m.group(0) else short(raw, 4)
         name = "".join(c for c in name if unicodedata.category(c) not in ("So", "Sk", "Cf", "Cs")).strip()  # flags, emoji
-    return name or site.split(".")[0].capitalize()
+    return name if name and not NOT_A_NAME.match(name) else site.split(".")[0].capitalize()
 
 
 def facts(site):
@@ -78,6 +84,8 @@ if __name__ == "__main__":
     assert store_name('<meta property="og:site_name" content="Love, Logan">', "x.shop") == "Love, Logan"
     assert store_name('<meta property="og:site_name" content="Ecuador 🇪🇨">', "x.shop") == "Ecuador"
     assert store_name("<title>Glow - Home</title>", "x.shop") == "Glow"
+    assert store_name('<meta property="og:site_name" content="Myshopify">', "harlemwines.com") == "Harlemwines"
+    assert store_name("<title>Just a moment...</title>", "acme.com") == "Acme"
     for s in sys.argv[1:]:
         print(s, facts(s))
     print("selfcheck ok")
