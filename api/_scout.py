@@ -12,6 +12,7 @@ import json
 import re
 import socket
 import urllib.request
+from _names import NAMES  # noqa: E402
 from urllib.parse import unquote, urlencode, urljoin, urlparse
 
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -40,7 +41,7 @@ ROLE = {"info", "sales", "admin", "contact", "contactus", "hello", "hi", "office
         "owner", "ceo", "founder", "boss", "manager", "shop", "store", "customerservice", "customercare", "care",
         "wholesale", "partnerships", "partners", "collab", "collabs", "pr", "studio", "events", "returns", "hr",
         "cs", "cx", "ce", "hq", "ops", "biz", "b2b", "mkt", "comment", "comments", "feedback", "atendimento", "hola",
-        "halo", "kontakt", "contacto", "ventas", "vendas"}
+        "halo", "kontakt", "contacto", "ventas", "vendas", "hey", "ask", "hiya", "yo", "howdy", "aloha"}
 # words that make e.g. "koveasupport@gmail.com" a shared inbox too
 ROLE_PARTS = ("support", "info", "sales", "contact", "hello", "enquir", "inquir", "booking", "order", "service",
               "admin", "office", "customer", "help", "team", "shop", "store", "web", "media", "press", "market",
@@ -205,7 +206,7 @@ def score(email, src, pages, site_root, on_contact_page, kind="role", named=Fals
     own, free = root(domain) == site_root or brand == site_brand, domain in FREE_MAIL
     if own:
         s += 4
-    elif len(site_brand) >= 5 and site_brand in brand:
+    elif len(site_brand) >= 5 and len(brand) >= 5 and (site_brand in brand or brand in site_brand):
         s += 1          # mybushbalm.com for bushbalm.com: almost surely theirs
     elif free:
         s += 1          # small businesses often use gmail
@@ -259,6 +260,12 @@ def scout(site):
         local = e.split("@")[0]
         kind = kind_of(local)
         name = person_name(local, site_text) if kind == "person" else ""
+        first = re.split(r"[._-]", base_local(local))[0]
+        # not a person: the brand itself (gvcouture@gvcouture.com) or an unknown word of a length names rarely have
+        # (lil@, nk@, yourfriends@, alwaysanswers@). ponytail: 4-7 letter unknown words still pass as names (heymama@)
+        known = first in NAMES or name
+        if kind == "person" and (first in site_root.replace("-", "") or (not known and not 4 <= len(first) <= 7)):
+            kind, name = "role", ""
         s = score(e, src, n, site_root, contact_pg, kind, bool(name))
         desk = kind == "role" and bool(SUPPORT.search(base_local(local)))
         conf = "high" if s >= 7 else "medium" if s >= 4 else "low"
@@ -297,6 +304,7 @@ def _selfcheck():
     assert not is_junk("hello@acme.com") and not is_junk("partnerships@acme.com") and not is_junk("support@acme.com")
     assert score("hello@acme.com", "mailto", 2, "acme.com", True) > score("support@acme.com", "mailto", 2, "acme.com", True)
     assert score("cs@acme.com", "mailto", 2, "acme.com", True) < score("info@acme.com", "mailto", 2, "acme.com", True)
+    assert score("katy@goodforthesoulart.com", "text", 1, "goodforthesoulartllc.com", False) > score("katy@other.com", "text", 1, "goodforthesoulartllc.com", False)
     assert kind_of("cs") == kind_of("cx") == kind_of("hola") == "role" and SUPPORT.search("cx")
     assert score("cs@acme.com", "mailto", 3, "acme.com", True) < score("hello@acme.com", "mailto", 3, "acme.com", True)
     assert is_junk("john@gmail.com") and is_junk("j.o.h.n@gmail.com") and not is_junk("johnsmith@gmail.com") and not is_junk("bob@yahoo.com")
