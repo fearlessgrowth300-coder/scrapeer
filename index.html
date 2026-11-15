@@ -324,8 +324,10 @@ input,textarea,select{font-size:16px!important}
       <p class="hint" style="margin-top:-4px">The app rotates through your accounts and stops each one at its daily limit. New domains: start ~50/day and raise it weekly. Keep this tab open while sending.</p>
       <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="plainmail" checked> Plain email: text only, no logo or open tracking (more likely to reach Inbox, not Promotions)</label>
       <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="freefirst" checked> Send to Gmail/Outlook addresses first (fewer bounces)</label>
+      <div class="field" style="margin:12px 0 0"><label for="test-to">Send the test to</label>
+        <input type="text" id="test-to" placeholder="Your sign-in email — or type any addresses, separated by commas (up to 5)"></div>
       <div class="btns" style="margin-top:12px">
-        <button class="ghost" id="send-test">Send test to myself</button>
+        <button class="ghost" id="send-test">Send test</button>
         <button class="primary" id="send-start">Start sending</button>
         <button class="ghost" id="send-stop" disabled>Pause</button>
       </div>
@@ -848,18 +850,28 @@ function checkReady(r) {
   if (m.body.includes("[change this")) return "Change the [change this to what you do] part of the message first.";
   return "";
 }
+$("test-to").value = local.get("scrapeer-test-to", "");
 $("send-test").onclick = async () => {
   const problem = checkReady(recipients[pvIdx] || enrich({email: "you@example.com"}));
   if (problem) return setMsg("send-msg", problem, "err");
   // one test, through the account that would send next (to check another account, move it to the top with ↑)
   const a = sendingPool().find(x => sentTodayVia(x.label) < x.cap) || sendingPool()[0];
-  const me = $("who-email").textContent.trim() || myAddress(a), sample = recipients[pvIdx] || enrich({email: me});
-  $("send-test").disabled = true; setMsg("send-msg", `Sending test via ${a.label} to ${me}…`);
-  const m = compose(sample), d = await post("/api/send", {account_id: a.id, to: me, subject: "[TEST] " + m.subject, body: m.body, reply_to: replyAddr(), signature: sigPayload(), plain: $("plainmail").checked}, 0);
+  const typed = $("test-to").value.split(/[\s,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+  const bad = typed.find(t => !EMAIL_RE.test(t));
+  if (bad) return setMsg("send-msg", `"${bad}" isn't an email address.`, "err");
+  if (typed.length > 5) return setMsg("send-msg", "Up to 5 test addresses at a time.", "err");
+  local.set("scrapeer-test-to", $("test-to").value.trim());
+  const to = typed.length ? typed : [$("who-email").textContent.trim() || myAddress(a)];
+  const sample = recipients[pvIdx] || enrich({email: to[0]}), m = compose(sample);
+  $("send-test").disabled = true; const ok = [];
+  for (const me of to) {
+    setMsg("send-msg", `Sending test via ${a.label} to ${me}…`);
+    const d = await post("/api/send", {account_id: a.id, to: me, subject: "[TEST] " + m.subject, body: m.body, reply_to: replyAddr(), signature: sigPayload(), plain: $("plainmail").checked}, 0);
+    if (d.error) { $("send-test").disabled = false; return setMsg("send-msg", `✗ ${a.label} → ${me}: ${d.error}` + (ok.length ? ` (already sent to ${ok.join(", ")})` : ""), "err"); }
+    record(me, "test", "", a.label, "[TEST] " + m.subject, m.body, d.message_id); ok.push(me);
+  }
   $("send-test").disabled = false;
-  if (d.error) return setMsg("send-msg", `✗ ${a.label}: ${d.error}`, "err");
-  record(me, "test", "", a.label, "[TEST] " + m.subject, m.body, d.message_id);
-  setMsg("send-msg", `✓ Test sent via ${a.label} to ${me} — check your inbox (and spam). To test another account, move it to the top with ↑.`, "ok");
+  setMsg("send-msg", `✓ Test sent via ${a.label} to ${ok.join(", ")} — check the inbox (and Promotions/spam). To test another account, move it to the top with ↑.`, "ok");
 };
 
 const isFreeMail = e => /@(gmail|googlemail|outlook|hotmail|live|yahoo|icloud|me|aol|proton|protonmail)[.]/i.test(e);
