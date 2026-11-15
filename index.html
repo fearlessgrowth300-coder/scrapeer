@@ -546,10 +546,10 @@ function parseRecips() {
   }
   const seen = new Set();
   recipients = list.filter(r => r.email && EMAIL_RE.test(r.email = r.email.toLowerCase()) && !seen.has(r.email) && seen.add(r.email)).map(enrich);
-  const blocked = dneSet(), sent = sentMap();
-  const ready = recipients.filter(r => !blocked.has(r.email) && !sent[r.email]).length;
-  $("recips-count").textContent = `${recipients.length} recipients · ${ready} not emailed yet` +
-    (recipients.length - ready ? ` · ${recipients.length - ready} skipped (already emailed or do-not-email)` : "");
+  const blocked = dneSet(), stores = sentStores();
+  const ready = onePerStore(recipients.filter(r => !blocked.has(r.email) && !alreadyDone(r, stores))).length;
+  $("recips-count").textContent = `${recipients.length} recipients · ${ready} will be emailed` +
+    (recipients.length - ready ? ` · ${recipients.length - ready} skipped (store already emailed, 2nd address of the same store, or do-not-email)` : "");
   renderChips(); pvIdx = 0; renderPreview();
 }
 $("recips").oninput = () => { saveDraft(); parseRecips(); };
@@ -777,6 +777,12 @@ $("reply-check").onclick = () => replyStep("reply_check");
 
 /* ---------- SEND: sending ---------- */
 const sentMap = () => store.get("scrapeer-sent", {});
+const host = s => String(s || "").toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split(/[\/?#,\s]/)[0];
+const storesOf = r => [host(r.site), isFreeMail(r.email) ? r.email : r.email.split("@")[1]].filter(Boolean);
+const sentStores = () => new Set(Object.keys(sentMap()).map(k => k.startsWith("site:") ? k.slice(5) : isFreeMail(k) ? k : k.split("@")[1]));
+const alreadyDone = (r, stores = sentStores()) => !!sentMap()[r.email] || storesOf(r).some(s => stores.has(s));
+// keep the first (best) address per store in a list; the rest would email the same company again
+const onePerStore = list => { const seen = new Set(); return list.filter(r => { const k = storesOf(r); if (k.some(s => seen.has(s))) return false; k.forEach(s => seen.add(s)); return true; }); };
 let log = [];  // loaded from your account after sign-in
 function record(email, status, note, via, subj, body, mid, att) {
   log.unshift({when: new Date().toLocaleString(), date: today(), ts: Date.now(), email, status, note: note || "", via: via || "",
@@ -850,7 +856,7 @@ const sleep = ms => new Promise(res => { const t = setTimeout(res, ms); wake = (
 $("send-stop").onclick = () => { sending = false; wake?.(); };
 $("send-start").onclick = async () => {
   parseRecips();
-  const blocked = dneSet(), queue = recipients.filter(r => !blocked.has(r.email) && !sentMap()[r.email]);
+  const blocked = dneSet(), stores = sentStores(), queue = onePerStore(recipients.filter(r => !blocked.has(r.email) && !alreadyDone(r, stores)));
   if (!queue.length) return setMsg("send-msg", "No one left to email (everyone is already emailed or on the do-not-email list).", "err");
   if ($("freefirst").checked) queue.sort((a, b) => isFreeMail(b.email) - isFreeMail(a.email));
   const problem = checkReady(queue[0]); if (problem) return setMsg("send-msg", problem, "err");
@@ -871,7 +877,7 @@ $("send-start").onclick = async () => {
   while (i < queue.length && sending) {
     if (tooManyBounces(runSent, bouncedNow)) { stopReason = "Stopped to protect your domain: 3 of your latest 20 emails bounced. Check your list before sending more."; break; }
     const r = queue[i];
-    if (sentMap()[r.email] || dneSet().has(r.email)) { i++; done++; continue; }  // bounced/spam-flagged meanwhile
+    if (alreadyDone(r) || dneSet().has(r.email)) { i++; done++; continue; }  // bounced/spam-flagged meanwhile
     const sentToday = log.filter(l => l.date === today() && l.status === "sent").length;
     if (sentToday >= cap) { await waitForTomorrow(`Your overall limit of ${cap} for today is reached.`); continue; }
     let d, a;
@@ -890,7 +896,8 @@ $("send-start").onclick = async () => {
     if (d.error) {
       fails++; consecutiveFails++; record(r.email, "failed", d.error, a.label);
       if (consecutiveFails >= 5) { stopReason = "Stopped after 5 failures in a row: " + d.error; break; }
-    } else { sent++; runSent.push(r.email); consecutiveFails = 0; { const m = compose(r); record(r.email, "sent", "", a.label, m.subject, m.body, d.message_id); } }
+    } else { sent++; runSent.push(r.email); consecutiveFails = 0; { const m = compose(r); record(r.email, "sent", "", a.label, m.subject, m.body, d.message_id);
+      if (host(r.site)) { const s = sentMap(); s["site:" + host(r.site)] = today(); store.set("scrapeer-sent", s); } } }
     i++; done++;
     $("st-sent").textContent = sent; $("st-failed").textContent = fails; $("send-fill").style.width = (100 * done / queue.length) + "%";
     if (done < queue.length && sending) {
