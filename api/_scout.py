@@ -208,17 +208,12 @@ def score(email, src, pages, site_root, on_contact_page, kind="role", named=Fals
     brand, site_brand = root(domain).split(".")[0], site_root.split(".")[0]
     # octobersveryown.net for octobersveryown.com, celticstudio.com for celticstudio.shop: same company, other ending
     free = domain in FREE_MAIL or domain.split(".")[0] in FREE_BRANDS
-    own = not free and (root(domain) == site_root or brand == site_brand)
-    if free:
-        loc, compact = re.sub(r"[^a-z]", "", email.split("@")[0]), re.sub(r"[^a-z]", "", site_brand)
-        words = [w for w in re.split(r"[^a-z]+", site_brand) if len(w) >= 5]  # volks-scheune -> scheune in scheunenteam@
-        own = len(compact) >= 4 and (compact in loc or (len(loc) >= 5 and loc in compact)) or any(w in loc for w in words)
+    # a Gmail/Outlook/Yahoo/AOL/GMX… shown on a store's site counts as the store's own address (high)
+    own = free or root(domain) == site_root or brand == site_brand
     if own:
         s += 4
     elif len(site_brand) >= 5 and len(brand) >= 5 and (site_brand in brand or brand in site_brand):
         s += 1          # mybushbalm.com for bushbalm.com: almost surely theirs
-    elif free:
-        s += 1          # small businesses often use gmail
     else:
         s -= 3          # another company's domain: often the web designer or a partner
     if kind == "role" and SUPPORT.search(base_local(email.split("@")[0])):
@@ -324,10 +319,10 @@ def _selfcheck():
     for e, site in [("blaurockblades@gmail.com", "blaurock-blades.com"), ("mein.wiegenlied@gmail.com", "meinwiegenlied.de"),
                     ("scheunenteam@gmail.com", "volks-scheune.de"), ("qswetch.de@gmail.com", "q-swetch.de")]:
         assert score(e, "mailto", 1, site, False) >= 7 and score(e, "mailto", 1, site, False) == score("hi@" + site, "mailto", 1, site, False), e  # same as their own domain
-    assert score("random123@gmail.com", "text", 1, "acme.com", False) < 7
+    assert score("random123@gmail.com", "mailto", 1, "acme.com", False) >= 7
     assert score("feiternutritionstore@gmx.de", "mailto", 1, "feiternutritionstore.com", False) >= 7
     assert score("valoenspark@outlook.de", "mailto", 1, "valoenspark.com", False) >= 7
-    assert score("someone@web.de", "mailto", 1, "acme.de", False) < 7
+    assert score("someone@web.de", "mailto", 1, "acme.de", False) >= 7
     print("selfcheck ok")
 
 
