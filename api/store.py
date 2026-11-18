@@ -48,10 +48,38 @@ def store_name(page, site):
     return name if name and not NOT_A_NAME.match(name) else site.split(".")[0].capitalize()
 
 
-def facts(site):
+# a country ending → the language people there read; a language → its main country
+CC_LANG = {"de": "de", "at": "de", "ch": "de", "fr": "fr", "be": "fr", "es": "es", "mx": "es", "ar": "es", "it": "it", "nl": "nl",
+           "pt": "pt", "br": "pt", "pl": "pl", "se": "sv", "dk": "da", "no": "no", "fi": "fi", "gr": "el", "cz": "cs", "jp": "ja"}
+LANG_CC = {"de": "DE", "fr": "FR", "es": "ES", "it": "IT", "nl": "NL", "pt": "PT", "pl": "PL", "sv": "SE", "da": "DK", "nb": "NO",
+           "no": "NO", "fi": "FI", "el": "GR", "cs": "CZ", "ja": "JP"}
+NOT_COUNTRY = {"co", "io", "me", "tv", "ai", "eu", "fm", "ly", "gg", "to", "cc", "ws", "la", "is"}  # used as words: shop.co, app.io
+
+
+def locale(page, site):
+    """(country code, language) from the domain ending, <html lang="de-DE">, og:locale, then Shopify's own country."""
+    tld = site.rsplit(".", 1)[-1]
+    tag = re.search(r"<html[^>]*?\slang=[\"']?([a-zA-Z]{2,3})(?:[-_]([a-zA-Z]{2}))?", page)
+    og = re.search(r"og:locale[\"'][^>]*content=[\"']([a-z]{2})_([A-Za-z]{2})", page)
+    shop = re.search(r'Shopify\.country\s*=\s*"([A-Z]{2})"', page)
+    lang = (tag and tag.group(1).lower()) or (og and og.group(1)) or CC_LANG.get(tld) or "en"
+    region = ((tag and tag.group(2)) or (og and og.group(2)) or "").upper()
+    if len(tld) == 2 and tld not in NOT_COUNTRY:
+        country = "GB" if tld == "uk" else tld.upper()
+    elif region and not (lang == "en" and region == "US"):  # en-US is just the default on most English sites
+        country = region
+    else:
+        country = (shop and shop.group(1)) or LANG_CC.get(lang) or "US"
+    return country, lang
+
+
+def facts(site, only_locale=False):
     site = re.sub(r"^https?://", "", site.strip().lower()).removeprefix("www.").split("/")[0]
     page, _ = fetch("https://" + site)
     out = {"store": store_name(page, site)}
+    out["country"], out["lang"] = locale(page, site)
+    if only_locale:
+        return out
     raw, _ = fetch(f"https://{site}/products.json?limit=250")
     try:
         products = json.loads(raw).get("products") or []
@@ -70,7 +98,7 @@ def handle(body, user):
     site = str(body.get("site", "")).strip()
     if not site or len(site) > 300 or any(c.isspace() for c in site):
         raise Bad("give one website")
-    return facts(site)
+    return facts(site, bool(body.get("only_locale")))
 
 
 class handler(BaseHTTPRequestHandler):
@@ -89,6 +117,13 @@ if __name__ == "__main__":
     assert store_name("<title>Glow - Home</title>", "x.shop") == "Glow"
     assert store_name('<meta property="og:site_name" content="Myshopify">', "harlemwines.com") == "Harlemwines"
     assert store_name("<title>Just a moment...</title>", "acme.com") == "Acme"
+    assert locale('<html lang="de">', "yepoda.de") == ("DE", "de")
+    assert locale('<html class="x" lang="de-AT">', "shop.com") == ("AT", "de")
+    assert locale('<html lang="en">', "shop.co.uk") == ("GB", "en")
+    assert locale('<html lang="en-US">', "shop.com") == ("US", "en")
+    assert locale('<html lang="fr">', "shop.com") == ("FR", "fr")
+    assert locale('<html lang="en"> Shopify.country = "AU";', "shop.com") == ("AU", "en")
+    assert locale("", "shop.de") == ("DE", "de") and locale("", "shop.io") == ("US", "en")
     for s in sys.argv[1:]:
         print(s, facts(s))
     print("selfcheck ok")

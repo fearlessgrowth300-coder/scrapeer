@@ -338,6 +338,7 @@ input,textarea,select{font-size:16px!important}
       <div class="field"><label for="safecap">Max per account per day (warm-up)</label><input type="number" id="safecap" value="50" min="1" placeholder="each account's own limit"></div>
       <p class="hint" style="margin-top:-4px">New domains land in Primary more when each address sends little: keep 30–50 a day per account for the first weeks, then raise it by about 20 a week. For more volume, add more accounts on other domains instead of raising this. Keep this tab open while sending.</p>
       <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="plainmail" checked> Plain email: text only, no logo or open tracking (more likely to reach Inbox, not Promotions)</label>
+      <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="translate" checked> Translate each email into the store's language (German store → German email). Write in English; the preview shows the translation.</label>
       <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="workhours" checked> Only send in their working hours (Mon–Fri, 8 AM–5 PM in their country)</label>
       <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="freefirst" checked> Send to Gmail/Outlook addresses first (fewer bounces)</label>
       <div class="field" style="margin:12px 0 0"><label for="test-to">Send the test to</label>
@@ -522,7 +523,7 @@ $("tosend").onclick = async () => {
     $("tosend").textContent = `Reading stores ${sites.length - queue.length}/${sites.length}…`; } };
   await Promise.all(Array.from({length: Math.min(6, sites.length)}, worker));
   $("tosend").disabled = false; $("tosend").textContent = label;
-  const F = ["store", "product", "niche", "product_count"];
+  const F = ["store", "product", "niche", "product_count", "country", "lang"];
   $("recips").value = ["email,first_name,site,type," + F.join(","), ...rows.map(r => [r.email, realName(r.first_name), r.site, r.type, ...F.map(f => info[r.site]?.[f] || "")].map(csvQ).join(","))].join("\n");
   saveDraft(); parseRecips(); showTab("send");
 };
@@ -629,14 +630,22 @@ let pvIdx = 0;
 function renderPreview() {
   const r = recipients[pvIdx];
   if (!r) { $("pv-to").textContent = "Add recipients to see a preview"; $("pv-subj").textContent = ""; $("pv-body").textContent = ""; $("pv-pos").textContent = ""; return; }
-  const m = compose(r);
-  $("pv-to").textContent = "To: " + r.email; $("pv-subj").textContent = m.subject || "(no subject)"; $("pv-body").textContent = m.body;
+  const m = compose(r), lang = langOf(r), tr = $("translate").checked && lang !== "en";
+  const where = `${countryOf(r)} · ${inWorkHours(r) ? "working hours now" : "outside working hours now"}`;
+  $("pv-to").textContent = `To: ${r.email} · ${where}` + (tr ? ` · sent in ${LANG_NAME(lang)}` : "");
+  $("pv-subj").textContent = m.subject || "(no subject)"; $("pv-body").textContent = m.body;
   $("pv-pos").textContent = `${pvIdx + 1} of ${recipients.length}`;
+  if (tr && m.subject && !/\{\{/.test(m.subject + m.body)) {
+    const idx = pvIdx; clearTimeout(renderPreview.t);
+    renderPreview.t = setTimeout(async () => { const t = await localized(r); if (idx !== pvIdx) return;
+      if (t.trError) return $("pv-to").textContent += ` (translation failed: ${t.trError})`;
+      $("pv-subj").textContent = t.subject; $("pv-body").textContent = t.body + "\n\n— English original —\n" + m.subject + "\n" + m.body; }, 600);
+  }
 }
 $("pv-prev").onclick = () => { pvIdx = Math.max(0, pvIdx - 1); renderPreview(); };
 $("pv-next").onclick = () => { pvIdx = Math.min(recipients.length - 1, pvIdx + 1); renderPreview(); };
 for (const id of ["subject", "body", "footer", "delay", "cap"]) $(id).addEventListener("input", () => { saveDraft(); renderPreview(); });
-for (const id of ["safecap", "workhours"]) $(id).addEventListener("change", () => { saveDraft(); renderAccounts(); });
+for (const id of ["safecap", "workhours", "translate"]) $(id).addEventListener("change", () => { saveDraft(); renderAccounts(); renderPreview(); });
 
 /* ---------- SEND: account ---------- */
 const ACC = ["provider", "key", "domain", "from", "replyto", "user", "pass", "name", "host", "port", "cap"];
@@ -895,7 +904,8 @@ $("send-test").onclick = async () => {
   if (typed.length > 5) return setMsg("send-msg", "Up to 5 test addresses at a time.", "err");
   local.set("scrapeer-test-to", $("test-to").value.trim());
   const to = typed.length ? typed : [$("who-email").textContent.trim() || myAddress(a)];
-  const sample = recipients[pvIdx] || enrich({email: to[0]}), m = compose(sample);
+  const sample = recipients[pvIdx] || enrich({email: to[0]}), m = await localized(sample);
+  if (m.trError) return setMsg("send-msg", "Couldn't translate the test: " + m.trError, "err");
   $("send-test").disabled = true; const ok = [];
   for (const me of to) {
     setMsg("send-msg", `Sending test via ${a.label} to ${me}…`);
@@ -940,11 +950,31 @@ async function showFuDue() {
 for (const id of ["fu-on", "fu1", "fu2", "fu1-days", "fu2-days"]) $(id).addEventListener("change", () => { saveDraft(); showFuDue(); });
 
 // ===== 5) working hours in THEIR country, guessed from the website ending (.de → Germany); .com etc. → US East =====
-const TZ = {de: "Europe/Berlin", at: "Europe/Vienna", ch: "Europe/Zurich", uk: "Europe/London", ie: "Europe/Dublin", fr: "Europe/Paris", es: "Europe/Madrid",
-  it: "Europe/Rome", nl: "Europe/Amsterdam", be: "Europe/Brussels", dk: "Europe/Copenhagen", se: "Europe/Stockholm", no: "Europe/Oslo", fi: "Europe/Helsinki",
-  pl: "Europe/Warsaw", cz: "Europe/Prague", pt: "Europe/Lisbon", gr: "Europe/Athens", au: "Australia/Sydney", nz: "Pacific/Auckland", ca: "America/Toronto",
-  br: "America/Sao_Paulo", mx: "America/Mexico_City", in: "Asia/Kolkata", sg: "Asia/Singapore", za: "Africa/Johannesburg", ng: "Africa/Lagos", ae: "Asia/Dubai", jp: "Asia/Tokyo"};
-const tzOf = r => TZ[(host(r.site) || r.email.split("@")[1] || "").split(".").pop()] || "America/New_York";  // ponytail: a .com in London counts as US time
+const TZ = {DE: "Europe/Berlin", AT: "Europe/Vienna", CH: "Europe/Zurich", GB: "Europe/London", IE: "Europe/Dublin", FR: "Europe/Paris", ES: "Europe/Madrid",
+  IT: "Europe/Rome", NL: "Europe/Amsterdam", BE: "Europe/Brussels", DK: "Europe/Copenhagen", SE: "Europe/Stockholm", NO: "Europe/Oslo", FI: "Europe/Helsinki",
+  PL: "Europe/Warsaw", CZ: "Europe/Prague", PT: "Europe/Lisbon", GR: "Europe/Athens", AU: "Australia/Sydney", NZ: "Pacific/Auckland", CA: "America/Toronto",
+  BR: "America/Sao_Paulo", MX: "America/Mexico_City", IN: "Asia/Kolkata", SG: "Asia/Singapore", ZA: "Africa/Johannesburg", NG: "Africa/Lagos", AE: "Asia/Dubai",
+  JP: "Asia/Tokyo", US: "America/New_York"};
+const CC_LANG = {de: "de", at: "de", ch: "de", fr: "fr", be: "fr", es: "es", mx: "es", it: "it", nl: "nl", pt: "pt", br: "pt", pl: "pl", se: "sv", dk: "da", no: "no", fi: "fi", gr: "el", cz: "cs", jp: "ja"};
+const tldOf = r => (host(r.site) || r.email.split("@")[1] || "").split(".").pop();
+// the store's own country (read from its website), else the domain ending; ponytail: a big US/AU/CA country gets one time zone
+const countryOf = r => r.country || (tldOf(r) === "uk" ? "GB" : TZ[tldOf(r).toUpperCase()] ? tldOf(r).toUpperCase() : "US");
+const tzOf = r => TZ[countryOf(r)] || "America/New_York";
+const langOf = r => String(r.lang || CC_LANG[tldOf(r)] || "en").toLowerCase().split("-")[0];
+const LANG_NAME = l => { try { return new Intl.DisplayNames(["en"], {type: "language"}).of(l); } catch { return l; } };
+// the email in the store's language: written once in English, translated per person (names and {{fields}} filled in first)
+const trCache = new Map();
+async function localized(r) {
+  const m = compose(r), lang = langOf(r);
+  if (!$("translate").checked || lang === "en") return m;
+  const k = lang + "\n" + m.subject + "\n" + m.body;
+  if (!trCache.has(k)) {
+    const d = await post("/api/translate", {to: lang, texts: [m.subject, m.body]}, 1);
+    if (d.error) return {...m, trError: d.error};
+    trCache.set(k, d.from === lang ? m : {subject: r.fu ? m.subject : d.texts[0], body: d.texts[1], lang});
+  }
+  return trCache.get(k);
+}
 const inWorkHours = r => { const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", {timeZone: tzOf(r), weekday: "short", hour: "numeric", hourCycle: "h23"})
   .formatToParts(new Date()).map(x => [x.type, x.value])); return !/Sat|Sun/.test(p.weekday) && +p.hour >= 8 && +p.hour < 17; };
 // safe daily amount per account while a domain is new (each account's own limit still applies if lower)
@@ -961,6 +991,13 @@ $("send-start").onclick = async () => {
   let fus = [];
   try { setMsg("send-msg", "Checking who replied…"); fus = await dueFollowUps(); } catch (e) { return setMsg("send-msg", "Couldn't check who replied, so nothing was sent: " + e.message, "err"); }
   const fresh = assignPlan(all), queue = [...fus, ...fresh];
+  const unknown = [...new Set(queue.filter(r => !r.lang && r.site).map(r => host(r.site)))], found = {}, todo = [...unknown];
+  if (unknown.length) {
+    await Promise.all(Array.from({length: Math.min(6, unknown.length)}, async () => { while (todo.length) { const s = todo.shift();
+      found[s] = await post("/api/store", {site: s, only_locale: true}, 1); setMsg("send-msg", `Finding each store's country and language… ${unknown.length - todo.length}/${unknown.length}`); } }));
+    for (const r of queue) { const f = found[host(r.site)]; if (f && !f.error && !r.lang) { r.country = f.country; r.lang = f.lang; } }
+    for (const r of recipients) { const f = found[host(r.site)]; if (f && !f.error && !r.lang) { r.country = f.country; r.lang = f.lang; } }
+  }
   if (fus.length && /\{\{/.test(compose(fus[0]).body)) return setMsg("send-msg", "A {{field}} in your follow-up isn't filled in. Use {{first_name|there}} style defaults.", "err");
   if (!queue.length) return setMsg("send-msg", plan.length ? "Every round is already done — add a round or press Reset progress." : "No one left to email (everyone is already emailed or on the do-not-email list).", "err");
   for (const r of plan.length ? [...new Map(fresh.map(r => [r.tpl.name, r])).values()] : fresh.slice(0, 1)) {  // one check per template used
@@ -995,7 +1032,8 @@ $("send-start").onclick = async () => {
     let d, a;
     while ((a = pick())) {  // a full or broken account hands the SAME person to the next account
       setMsg("send-msg", `Sending to ${r.email} via ${a.label}…`);
-      const m = compose(r);
+      const m = await localized(r);
+      if (m.trError) { d = {error: "translation failed: " + m.trError}; break; }  // never send English to a German store by accident
       d = await post("/api/send", {account_id: a.id, to: r.email, subject: m.subject, body: m.body, reply_to: replyAddr(), signature: sigPayload(), plain: $("plainmail").checked,
                                    check: true, in_reply_to: r.inReplyTo || ""}, 1);
       if (d.error && /daily|limit|quota|exceeded/i.test(d.error)) { full.add(a.id); record(r.email, "failed", "account full today: " + d.error, a.label); continue; }
@@ -1010,7 +1048,7 @@ $("send-start").onclick = async () => {
     if (d.error) {
       fails++; consecutiveFails++; record(r.email, "failed", d.error, a.label);
       if (consecutiveFails >= 5) { stopReason = "Stopped after 5 failures in a row: " + d.error; break; }
-    } else { sent++; runSent.push(r.email); consecutiveFails = 0; { const m = compose(r); record(r.email, "sent", r.fu ? "follow-up " + r.fu : "", a.label, m.subject, m.body, d.message_id); if (r.fu) { log[0].fu = r.fu; store.set("scrapeer-log", log); }
+    } else { sent++; runSent.push(r.email); consecutiveFails = 0; { const m = await localized(r); record(r.email, "sent", r.fu ? "follow-up " + r.fu : "", a.label, m.subject, m.body, d.message_id); if (r.fu) { log[0].fu = r.fu; store.set("scrapeer-log", log); }
       if (host(r.site)) { const s = sentMap(); s["site:" + host(r.site)] = today(); store.set("scrapeer-sent", s); }
       if (r.round) { r.round.done = (r.round.done || 0) + 1; saveDraft(); renderPlan(); } } }
     i++; done++;
@@ -1474,7 +1512,7 @@ $("tpl-del").onclick = () => {
   store.set("scrapeer-templates", store.get("scrapeer-templates", []).filter(x => x.name !== t.name)); renderTemplates();
 };
 function saveDraft() { store.set("scrapeer-draft", {recips: $("recips").value, subject: $("subject").value, body: $("body").value,
-  footer: $("footer").value, delay: $("delay").value, cap: $("cap").value, plan, safecap: $("safecap").value, workhours: $("workhours").checked,
+  footer: $("footer").value, delay: $("delay").value, cap: $("cap").value, plan, safecap: $("safecap").value, workhours: $("workhours").checked, translate: $("translate").checked,
   fuOn: $("fu-on").checked, fu1: $("fu1").value, fu2: $("fu2").value, fu1d: $("fu1-days").value, fu2d: $("fu2-days").value}); }
 function restoreUI() {
   log = store.get("scrapeer-log", []);
@@ -1486,6 +1524,7 @@ function restoreUI() {
   plan = Array.isArray(d.plan) ? d.plan.filter(p => p && p.tpl) : []; renderPlan();
   if (d.safecap != null) $("safecap").value = d.safecap;
   if (d.workhours != null) $("workhours").checked = d.workhours;
+  if (d.translate != null) $("translate").checked = d.translate;
   if (d.fuOn != null) $("fu-on").checked = d.fuOn;
   $("fu1").value = d.fu1 ?? FU_DEFAULT[0]; $("fu2").value = d.fu2 ?? FU_DEFAULT[1];
   if (d.fu1d) $("fu1-days").value = d.fu1d; if (d.fu2d) $("fu2-days").value = d.fu2d;
