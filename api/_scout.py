@@ -65,7 +65,7 @@ PLACEHOLDER_LOCALS = {"name", "email", "you", "your", "yourname", "youremail", "
 WRONG_DESK = re.compile(r"privacy|gdpr|dpo|dataprotection|legal|dmca|copyright|compliance|careers|jobs|recruit|hiring|"
                         r"talent|^hr$|newsletter|subscribe|news$|accessibility|investor|^ir$|security|ethics|fraud|"
                         r"no\.?-?reply|do\.?-?not\.?-?reply|returns?$|datenschutz|impressum|imprint|widerruf|revocation|retour|"
-                        r"refund|^rma$|abuse|karriere|bewerbung|billing|invoice|rechnung|buchhaltung|accounting|^factur")
+                        r"refund|^rma$|abuse|karriere|bewerbung|^job$|billing|invoice|rechnung|buchhaltung|accounting|^factur")
 # help-desk inboxes: answered by ticket software ("Case 0233 received") and support agents, not decision makers
 SUPPORT = re.compile(r"support|help|service|care|^c[sx]$|custserv|orders?$|tickets?|^returns?|warranty|claims|atendimento|feedback|soporte|suporte|supporto|hilfe|ayuda|"
                      r"servicio|kundendienst|atencion|garantie|reklamation|bestellung|versand|shipping|delivery")
@@ -206,6 +206,10 @@ def score(email, src, pages, site_root, on_contact_page, kind="role", named=Fals
     brand, site_brand = root(domain).split(".")[0], site_root.split(".")[0]
     # octobersveryown.net for octobersveryown.com, celticstudio.com for celticstudio.shop: same company, other ending
     own, free = root(domain) == site_root or brand == site_brand, domain in FREE_MAIL
+    if free:
+        loc, compact = re.sub(r"[^a-z]", "", email.split("@")[0]), re.sub(r"[^a-z]", "", site_brand)
+        words = [w for w in re.split(r"[^a-z]+", site_brand) if len(w) >= 5]  # volks-scheune -> scheune in scheunenteam@
+        own = len(compact) >= 4 and (compact in loc or (len(loc) >= 5 and loc in compact)) or any(w in loc for w in words)
     if own:
         s += 4
     elif len(site_brand) >= 5 and len(brand) >= 5 and (site_brand in brand or brand in site_brand):
@@ -263,10 +267,11 @@ def scout(site):
         kind = kind_of(local)
         name = person_name(local, site_text) if kind == "person" else ""
         first = re.split(r"[._-]", base_local(local))[0]
-        # not a person: the brand itself (gvcouture@gvcouture.com) or an unknown word of a length names rarely have
-        # (lil@, nk@, yourfriends@, alwaysanswers@). ponytail: 4-7 letter unknown words still pass as names (heymama@)
-        known = first in NAMES or name
-        if kind == "person" and (first in site_root.replace("-", "") or (not known and not 4 <= len(first) <= 7)):
+        # a person only when the first part is a known first name, or the address is first.last (bettina.zammert@).
+        # Words (hallo@, servus@, bestellung@, lecker@, hotel@), towns (muenchen-ost@) and the brand itself are inboxes:
+        # "Hallo Bestellung" is worse than "Hallo". ponytail: a rare real name not in NAMES gets no greeting name
+        dotted = re.fullmatch(r"[a-z]{3,12}\.[a-z]{2,20}", base_local(local))
+        if kind == "person" and (first in site_root.replace("-", "") or not (first in NAMES or dotted)):
             kind, name = "role", ""
         s = score(e, src, n, site_root, contact_pg, kind, bool(name))
         desk = kind == "role" and bool(SUPPORT.search(base_local(local)))
@@ -313,6 +318,10 @@ def _selfcheck():
     assert kind_of("aldoweb") == kind_of("mediainquiries") == kind_of("socialmedia") == "role" and kind_of("sarah") == "person"
     assert score("info@octobersveryown.net", "mailto", 2, "octobersveryown.com", True) == score("info@octobersveryown.com", "mailto", 2, "octobersveryown.com", True)
     assert score("team@mybushbalm.com", "text", 1, "bushbalm.com", False) > score("team@agency.com", "text", 1, "bushbalm.com", False)
+    for e, site in [("blaurockblades@gmail.com", "blaurock-blades.com"), ("mein.wiegenlied@gmail.com", "meinwiegenlied.de"),
+                    ("scheunenteam@gmail.com", "volks-scheune.de"), ("qswetch.de@gmail.com", "q-swetch.de")]:
+        assert score(e, "mailto", 1, site, False) >= 7 and score(e, "mailto", 1, site, False) == score("hi@" + site, "mailto", 1, site, False), e  # same as their own domain
+    assert score("random123@gmail.com", "text", 1, "acme.com", False) < 7
     print("selfcheck ok")
 
 
