@@ -917,7 +917,8 @@ $("send-test").onclick = async () => {
   setMsg("send-msg", `✓ Test sent via ${a.label} to ${ok.join(", ")} — check the inbox (and Promotions/spam). To test another account, move it to the top with ↑.`, "ok");
 };
 
-const isFreeMail = e => /@(gmail|googlemail|outlook|hotmail|live|yahoo|icloud|me|aol|proton|protonmail)[.]/i.test(e);
+// each person at a free provider is their own "store" (else every gmx.de address counts as one company)
+const isFreeMail = e => /@(gmail|googlemail|outlook|hotmail|live|msn|yahoo|ymail|icloud|me|mac|aol|proton|protonmail|pm|gmx|web|t-online|freenet|posteo|mailbox|mail|online|arcor|vodafone|1und1|kabelmail|bluewin|hispeed|chello|aon|a1|orange|free|laposte|sfr|wanadoo|libero|virgilio|tiscali|alice|tim|seznam|wp|o2|onet|interia|btinternet|sky|zoho|yandex|telenet|skynet|ziggo|kpnmail|home)[.]/i.test(e);
 // the brake: bounces hurt the domain, so a run stops itself when too many of its latest emails come back
 const bouncedNow = new Set(), tooManyBounces = (sentThisRun, bounced) => sentThisRun.slice(-20).filter(e => bounced.has(e)).length >= 3;
 const FU_DEFAULT = ["{Hi|Hey} {{first_name|there}},\n\n{Just bumping this up|Quick follow-up on my note below|Circling back on this}. {Is this something you'd want help with|Would this be useful for your store|Worth a quick chat}?",

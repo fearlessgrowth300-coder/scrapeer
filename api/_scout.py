@@ -34,6 +34,8 @@ TIMEOUT = 8
 
 FREE_MAIL = {"gmail.com", "googlemail.com", "yahoo.com", "outlook.com", "hotmail.com", "live.com", "icloud.com",
              "me.com", "aol.com", "proton.me", "protonmail.com", "gmx.com", "zoho.com", "yandex.com", "mail.com"}
+# the same providers in every country: gmx.de, web.de, t-online.de, outlook.de, orange.fr, libero.it…
+FREE_BRANDS = set("gmail|googlemail|outlook|hotmail|live|msn|yahoo|ymail|icloud|me|mac|aol|proton|protonmail|pm|gmx|web|t-online|freenet|posteo|mailbox|mail|online|arcor|vodafone|1und1|kabelmail|bluewin|hispeed|chello|aon|a1|orange|free|laposte|sfr|wanadoo|libero|virgilio|tiscali|alice|tim|seznam|wp|o2|onet|interia|btinternet|sky|zoho|yandex|telenet|skynet|ziggo|kpnmail|home".split("|"))
 # shared inboxes: real, but read by "whoever" (or nobody); owner@/ceo@ are often vanity addresses
 ROLE = {"info", "sales", "admin", "contact", "contactus", "hello", "hi", "office", "support", "help", "team",
         "enquiries", "inquiries", "enquiry", "inquiry", "booking", "bookings", "orders", "order", "service", "mail",
@@ -205,7 +207,8 @@ def score(email, src, pages, site_root, on_contact_page, kind="role", named=Fals
     s = SOURCE_SCORE[src] + min(pages, 3) + (1 if on_contact_page else 0)
     brand, site_brand = root(domain).split(".")[0], site_root.split(".")[0]
     # octobersveryown.net for octobersveryown.com, celticstudio.com for celticstudio.shop: same company, other ending
-    own, free = root(domain) == site_root or brand == site_brand, domain in FREE_MAIL
+    free = domain in FREE_MAIL or domain.split(".")[0] in FREE_BRANDS
+    own = not free and (root(domain) == site_root or brand == site_brand)
     if free:
         loc, compact = re.sub(r"[^a-z]", "", email.split("@")[0]), re.sub(r"[^a-z]", "", site_brand)
         words = [w for w in re.split(r"[^a-z]+", site_brand) if len(w) >= 5]  # volks-scheune -> scheune in scheunenteam@
@@ -322,6 +325,9 @@ def _selfcheck():
                     ("scheunenteam@gmail.com", "volks-scheune.de"), ("qswetch.de@gmail.com", "q-swetch.de")]:
         assert score(e, "mailto", 1, site, False) >= 7 and score(e, "mailto", 1, site, False) == score("hi@" + site, "mailto", 1, site, False), e  # same as their own domain
     assert score("random123@gmail.com", "text", 1, "acme.com", False) < 7
+    assert score("feiternutritionstore@gmx.de", "mailto", 1, "feiternutritionstore.com", False) >= 7
+    assert score("valoenspark@outlook.de", "mailto", 1, "valoenspark.com", False) >= 7
+    assert score("someone@web.de", "mailto", 1, "acme.de", False) < 7
     print("selfcheck ok")
 
 
