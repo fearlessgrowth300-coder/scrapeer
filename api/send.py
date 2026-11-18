@@ -14,7 +14,9 @@ import smtplib
 import ssl
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
+import functools
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid
 from http.server import BaseHTTPRequestHandler
@@ -218,6 +220,29 @@ def with_extras(body, text):
     return text, html
 
 
+@functools.lru_cache(maxsize=2000)
+def takes_email(domain):
+    """False only when DNS clearly says this domain gets no email (doesn't exist, null MX, or no MX and no address).
+    Any lookup trouble → True: the check may skip dead addresses, never block good ones."""
+    try:
+        for kind in ("MX", "A"):
+            with urllib.request.urlopen(f"https://dns.google/resolve?name={urllib.parse.quote(domain)}&type={kind}", timeout=4) as r:
+                d = json.load(r)
+            if d.get("Status") == 3:
+                return False
+            if d.get("Status") != 0:
+                return True
+            ans = [a for a in d.get("Answer") or [] if a.get("type") in (15, 1, 5)]
+            mx = [str(a.get("data", "")).strip() for a in ans if a.get("type") == 15]
+            if mx and all(x in ("0 .", "0") for x in mx):
+                return False  # null MX (RFC 7505): "this domain accepts no mail"
+            if ans:
+                return True
+        return False
+    except Exception:
+        return True
+
+
 def send(body):
     acct = body.get("account") or {}
     override = str(body.get("reply_to") or "").strip().lower()
@@ -241,6 +266,9 @@ def send(body):
         msg["To"] = to
         msg["Subject"] = subject
         msg["Message-ID"] = make_msgid(domain=user.split("@")[1])
+        in_reply_to = one_line(body.get("in_reply_to"), 300)
+        if in_reply_to.startswith("<") and in_reply_to.endswith(">"):  # a follow-up: same thread as the first email
+            msg["In-Reply-To"] = msg["References"] = in_reply_to
         reply_to = str(acct.get("reply_to", "")).strip().lower()
         if EMAIL.fullmatch(reply_to):
             msg["Reply-To"] = reply_to
@@ -280,6 +308,9 @@ def handle(body, user):
     if body.get("signature") and not str((body["signature"] or {}).get("logo") or "").startswith(
             f"{SUPABASE_URL}/storage/v1/object/public/scrapeer-public/{user['id']}/"):
         body = {**body, "signature": {"text": (body["signature"] or {}).get("text", "")}}  # only your own logo
+    to = str(body.get("to", "")).strip().lower()
+    if body.get("check") and EMAIL.fullmatch(to) and not takes_email(to.split("@")[1]):
+        return {"ok": False, "skipped": "No mail server at " + to.split("@")[1] + ", so this address can't receive email. Skipped, nothing sent."}
     return send(body)
 
 

@@ -300,7 +300,7 @@ input,textarea,select{font-size:16px!important}
       <div class="field"><label for="body">Message</label>
         <textarea id="body" placeholder="Hi {{first_name|there}},&#10;&#10;I came across {{site}} and..."></textarea>
         <div class="chips" id="chips"></div>
-        <p class="hint">Click a field to insert it. <code>{{first_name|there}}</code> uses "there" when no name is known.</p></div>
+        <p class="hint">Click a field to insert it. <code>{{first_name|there}}</code> uses "there" when no name is known. <code>{Hi|Hey|Hello}</code> picks one per person, so no two emails are identical (Gmail notices copies).</p></div>
       <div class="field"><label for="footer">Opt-out line (added to every email)</label><input type="text" id="footer" value="Not interested? Just reply &quot;no&quot; and I won't email again."></div>
       <label>Preview</label>
       <div class="preview" aria-live="polite"><div class="to" id="pv-to"></div><div class="subj" id="pv-subj"></div><pre id="pv-body"></pre></div>
@@ -318,13 +318,27 @@ input,textarea,select{font-size:16px!important}
       <div class="msg" id="sig-msg" role="status"></div>
     </div>
     <div class="card">
+      <h2>Follow-ups</h2>
+      <p class="hint" style="margin:-6px 0 12px">Most replies come from the 2nd or 3rd email. People who haven't replied get a short follow-up in the same thread, with your first email quoted under it. Anyone who replied, bounced or is on do-not-email is skipped. Follow-ups go out first when you press Start sending and count toward each account's daily limit.</p>
+      <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="fu-on" checked> Send follow-ups</label>
+      <div class="row2">
+        <div class="field"><label for="fu1-days">Follow-up 1: days after the first email</label><input type="number" id="fu1-days" value="3" min="1"></div>
+        <div class="field"><label for="fu2-days">Follow-up 2: days after follow-up 1</label><input type="number" id="fu2-days" value="4" min="1"></div>
+      </div>
+      <div class="field"><label for="fu1">Follow-up 1</label><textarea id="fu1" style="height:100px"></textarea></div>
+      <div class="field"><label for="fu2">Follow-up 2 (leave empty to send only one)</label><textarea id="fu2" style="height:100px"></textarea></div>
+      <p class="hint" id="fu-due"></p>
+    </div>
+    <div class="card">
       <h2>4. Send</h2>
       <div class="row2">
         <div class="field"><label for="delay">Wait between emails (seconds)</label><input type="text" id="delay" value="60-120"></div>
         <div class="field"><label for="cap">Overall max per day</label><input type="number" id="cap" placeholder="no extra limit" min="1"></div>
       </div>
-      <p class="hint" style="margin-top:-4px">The app rotates through your accounts and stops each one at its daily limit. New domains: start ~50/day and raise it weekly. Keep this tab open while sending.</p>
+      <div class="field"><label for="safecap">Max per account per day (warm-up)</label><input type="number" id="safecap" value="50" min="1" placeholder="each account's own limit"></div>
+      <p class="hint" style="margin-top:-4px">New domains land in Primary more when each address sends little: keep 30–50 a day per account for the first weeks, then raise it by about 20 a week. For more volume, add more accounts on other domains instead of raising this. Keep this tab open while sending.</p>
       <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="plainmail" checked> Plain email: text only, no logo or open tracking (more likely to reach Inbox, not Promotions)</label>
+      <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="workhours" checked> Only send in their working hours (Mon–Fri, 8 AM–5 PM in their country)</label>
       <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="freefirst" checked> Send to Gmail/Outlook addresses first (fewer bounces)</label>
       <div class="field" style="margin:12px 0 0"><label for="test-to">Send the test to</label>
         <input type="text" id="test-to" placeholder="Your sign-in email — or type any addresses, separated by commas (up to 5)"></div>
@@ -440,7 +454,7 @@ const visible = () => {  // results are sorted best-first, so the first one per 
   return results.filter(r => ($("showlow").checked || r.confidence !== "low") &&
     (!$("bestonly").checked || (!seenSite.has(r.site) && seenSite.add(r.site))));
 };
-const toSend = () => visible().filter(r => r.confidence !== "low");
+const toSend = () => visible().filter(r => r.confidence !== "low" && !wrongDesk(r.email));
 const typeLabel = r => r.type === "role" ? (r.desk ? "support desk" : "shared inbox") : "person" + (r.first_name ? " · " + esc(r.first_name) : "");
 function renderFind() {
   const rows = visible();
@@ -555,9 +569,10 @@ function parseRecips() {
   const seen = new Set();
   recipients = list.filter(r => r.email && EMAIL_RE.test(r.email = r.email.toLowerCase()) && !seen.has(r.email) && seen.add(r.email)).map(enrich);
   const blocked = dneSet(), stores = sentStores();
-  const ready = assignPlan(onePerStore(recipients.filter(r => !blocked.has(r.email) && !alreadyDone(r, stores)))).length;
+  const ready = assignPlan(onePerStore(recipients.filter(r => !blocked.has(r.email) && !wrongDesk(r.email) && !alreadyDone(r, stores)))).length;
+  const desks = recipients.filter(r => wrongDesk(r.email)).length;
   $("recips-count").textContent = `${recipients.length} recipients · ${ready} will be emailed` +
-    (recipients.length - ready ? ` · ${recipients.length - ready} skipped (store already emailed, 2nd address of the same store, or do-not-email)` : "");
+    (recipients.length - ready ? ` · ${recipients.length - ready} skipped (store already emailed, 2nd address of the same store, do-not-email` + (desks ? `, or ${desks} support/privacy/legal inboxes` : "") + ")" : "");
   renderChips(); pvIdx = 0; renderPreview();
 }
 $("recips").oninput = () => { saveDraft(); parseRecips(); };
@@ -565,6 +580,10 @@ $("recips-file").onchange = e => {
   const f = e.target.files[0]; if (!f) return;
   const rd = new FileReader(); rd.onload = () => { $("recips").value = rd.result; saveDraft(); parseRecips(); }; rd.readAsText(f);
 };
+// inboxes that never buy: privacy (datenschutz), legal (impressum), cancellations (widerruf), support (soporte),
+// billing, jobs, returns, shipping… they answer with ticket robots or report you as spam. Checked on the part before @.
+const WRONG_DESK = /privacy|gdpr|^dpo$|datenschutz|dataprotection|legal|impressum|imprint|widerruf|revocation|retour|returns?$|refund|^rma$|dmca|copyright|compliance|abuse|careers|jobs|karriere|bewerbung|recruit|hiring|talent|^hr$|newsletter|subscribe|accessibility|investor|^ir$|security|ethics|fraud|no-?reply|do-?not-?reply|billing|invoice|rechnung|buchhaltung|accounting|^factur|support|upport|soporte|suporte|supporto|help|hilfe|^aide$|ayuda|service|servicio|kundendienst|customercare|care$|^c[sx]$|custserv|atencion|atendimento|tickets?|warranty|garantie|claims|reklamation|orders?$|bestellung|pedidos?$|commandes?$|versand|shipping|delivery|lieferung/i;
+const wrongDesk = email => WRONG_DESK.test(String(email).split("@")[0].replace(/\+.*/, ""));
 const dneSet = () => new Set($("dne").value.split(/[\s,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean));
 $("dne").oninput = () => { store.set("scrapeer-dne", $("dne").value); parseRecips(); };
 
@@ -580,10 +599,21 @@ function fill(tpl, r) {
     if (key === "store" && v && NOT_A_NAME.test(v)) v = r.site ? siteName(r) : "";  // "Myshopify" → the website's name
     return v || (dflt ?? "").trim(); });
 }
+const hashStr = s => { let h = [...s].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619), 2166136261); h = Math.imul(h ^ (h >>> 15), 2246822507); return (h ^ (h >>> 13)) >>> 0; };
+const spin = (t, seed) => { let n = 0; return String(t || "").replace(/(?<!\{)\{([^{}]*\|[^{}]*)\}(?!\})/g, (_, o) => {
+  const p = o.split("|"); return p[hashStr(seed + "#" + n++) % p.length]; }); };
 function compose(r) {
+  if (r.fu) return composeFu(r);
   const footer = $("footer").value.trim();
   const t = r.tpl || {subject: $("subject").value, body: $("body").value};
-  return {subject: fill(t.subject, r).trim(), body: fill(t.body, r).trim() + (footer ? "\n\n" + footer : "")};
+  return {subject: fill(spin(t.subject, r.email), r).trim(), body: fill(spin(t.body, r.email + "b"), r).trim() + (footer ? "\n\n" + footer : "")};
+}
+// a follow-up: same thread ("Re: <first subject>"), short text, your first email quoted underneath
+function composeFu(r) {
+  const footer = $("footer").value.trim(), o = r.orig;
+  const quote = o.snip ? `\n\nOn ${new Date(o.ts).toLocaleDateString("en-US", {month: "short", day: "numeric"})}, I wrote:\n` + o.snip.split("\n").map(l => "> " + l).join("\n") : "";
+  return {subject: /^re:/i.test(o.subj) ? o.subj : "Re: " + o.subj,
+          body: fill(spin(r.fuText, r.email + "f" + r.fu), r).trim() + (footer ? "\n\n" + footer : "") + quote};
 }
 function renderChips() {
   const keys = new Set(["first_name", "company", "site"]); recipients.slice(0, 20).forEach(r => Object.keys(r).forEach(k => keys.add(k)));
@@ -606,6 +636,7 @@ function renderPreview() {
 $("pv-prev").onclick = () => { pvIdx = Math.max(0, pvIdx - 1); renderPreview(); };
 $("pv-next").onclick = () => { pvIdx = Math.min(recipients.length - 1, pvIdx + 1); renderPreview(); };
 for (const id of ["subject", "body", "footer", "delay", "cap"]) $(id).addEventListener("input", () => { saveDraft(); renderPreview(); });
+for (const id of ["safecap", "workhours"]) $(id).addEventListener("change", () => { saveDraft(); renderAccounts(); });
 
 /* ---------- SEND: account ---------- */
 const ACC = ["provider", "key", "domain", "from", "replyto", "user", "pass", "name", "host", "port", "cap"];
@@ -706,13 +737,13 @@ $("acc-provider").addEventListener("change", () => { $("acc-cap").value = ""; sh
 let accounts = [];
 const sentTodayVia = label => log.filter(l => l.date === today() && l.status === "sent" && l.via === label).length;
 function renderAccounts() {
-  const pool = sendingPool(), next = pool.find(a => sentTodayVia(a.label) < a.cap);
+  const pool = sendingPool(), next = pool.find(a => sentTodayVia(a.label) < capOf(a));
   const live = a => a.provider === "smtp" ? "" : hookStatus[a.label] === "ok" ? ' <span class="pill sent" title="Ticks, Reading now and pop-ups are connected">live ✓</span>'
     : hookStatus[a.label] ? `<div class="hint" style="margin:2px 0 0;color:var(--err)">Live ticks off: ${esc(hookStatus[a.label])}</div>` : "";
-  $("acct-list").innerHTML = pool.map((a, i) => `<tr><td class="email">${i + 1}. ${esc(a.label)}${a === next ? ' <span class="pill sent">in use</span>' : sentTodayVia(a.label) >= a.cap ? ' <span class="pill low">full today</span>' : ""}${live(a)}</td>
-    <td>${sentTodayVia(a.label)} / ${a.cap}</td><td style="white-space:nowrap">${i ? `<button class="ghost" type="button" data-up="${esc(a.id)}" aria-label="Use earlier" title="Use this one earlier">↑</button> ` : ""}<button class="ghost" type="button" data-rm="${esc(a.id)}" aria-label="Remove">✕</button></td></tr>`).join("")
+  $("acct-list").innerHTML = pool.map((a, i) => `<tr><td class="email">${i + 1}. ${esc(a.label)}${a === next ? ' <span class="pill sent">in use</span>' : sentTodayVia(a.label) >= capOf(a) ? ' <span class="pill low">full today</span>' : ""}${live(a)}</td>
+    <td>${sentTodayVia(a.label)} / ${capOf(a)}</td><td style="white-space:nowrap">${i ? `<button class="ghost" type="button" data-up="${esc(a.id)}" aria-label="Use earlier" title="Use this one earlier">↑</button> ` : ""}<button class="ghost" type="button" data-rm="${esc(a.id)}" aria-label="Remove">✕</button></td></tr>`).join("")
     || `<tr><td colspan="3" class="empty" style="padding:14px">No accounts added yet.</td></tr>`;
-  const total = pool.reduce((s, a) => s + a.cap, 0);
+  const total = pool.reduce((s, a) => s + capOf(a), 0);
   $("acct-total").textContent = pool.length ? `${pool.length} account(s) · up to ${total} emails/day · used in this order: when one is full the next takes over` : "";
 }
 $("acct-list").onclick = async e => {
@@ -857,7 +888,7 @@ $("send-test").onclick = async () => {
   const problem = checkReady(recipients[pvIdx] || enrich({email: "you@example.com"}));
   if (problem) return setMsg("send-msg", problem, "err");
   // one test, through the account that would send next (to check another account, move it to the top with ↑)
-  const a = sendingPool().find(x => sentTodayVia(x.label) < x.cap) || sendingPool()[0];
+  const a = sendingPool().find(x => sentTodayVia(x.label) < capOf(x)) || sendingPool()[0];
   const typed = $("test-to").value.split(/[\s,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
   const bad = typed.find(t => !EMAIL_RE.test(t));
   if (bad) return setMsg("send-msg", `"${bad}" isn't an email address.`, "err");
@@ -879,28 +910,71 @@ $("send-test").onclick = async () => {
 const isFreeMail = e => /@(gmail|googlemail|outlook|hotmail|live|yahoo|icloud|me|aol|proton|protonmail)[.]/i.test(e);
 // the brake: bounces hurt the domain, so a run stops itself when too many of its latest emails come back
 const bouncedNow = new Set(), tooManyBounces = (sentThisRun, bounced) => sentThisRun.slice(-20).filter(e => bounced.has(e)).length >= 3;
+const FU_DEFAULT = ["{Hi|Hey} {{first_name|there}},\n\n{Just bumping this up|Quick follow-up on my note below|Circling back on this}. {Is this something you'd want help with|Would this be useful for your store|Worth a quick chat}?",
+  "{Hi|Hey} {{first_name|there}},\n\n{Last note from me|I'll leave it here}. If {now isn't a good time|this isn't a priority right now}, no worries at all. {Just reply \"later\" and I'll check back in a few months|Happy to help whenever it makes sense}."];
+const addDne = who => { const list = $("dne").value.trim(); if (!list.toLowerCase().includes(who)) { $("dne").value = (list ? list + "\n" : "") + who; store.set("scrapeer-dne", $("dne").value); } };
+// people emailed in the last 30 days who haven't written back (from that address or anyone at their company) and are due
+async function dueFollowUps() {
+  if (!$("fu-on").checked || !$("fu1").value.trim()) return [];
+  const [inbox, sentR] = resendAccounts().length ? await Promise.all([post("/api/track", {action: "inbox"}, 1), post("/api/track", {action: "sent"}, 1)]) : [{replies: []}, {emails: []}];
+  if (inbox.error) throw new Error(inbox.error);  // never follow up when we can't see who replied
+  const replied = new Set((inbox.replies || []).map(r => addrOf(r.from)).flatMap(a => [a, isFreeMail(a) ? a : a.split("@")[1]]));
+  const dne = dneSet(), now = Date.now(), gap = [0, $("fu1-days").value || 3, $("fu2-days").value || 4].map(n => Number(n) * 864e5), by = new Map();
+  for (const l of log) if (l.status === "sent" && l.ts) { const e = by.get(l.email) || {fus: []}; by.set(l.email, e);
+    if (l.fu) e.fus.push(l); else if (!e.first || l.ts < e.first.ts) e.first = l; }
+  const out = [];
+  for (const [email, e] of by) {
+    const n = e.fus.length + 1, text = [, $("fu1").value, $("fu2").value][n] || "", last = Math.max(e.first?.ts || 0, ...e.fus.map(f => f.ts));
+    if (!e.first?.subj || !text.trim() || now - last < gap[n] || now - e.first.ts > 30 * 864e5) continue;
+    if (dne.has(email) || replied.has(email) || replied.has(isFreeMail(email) ? email : email.split("@")[1])) continue;
+    // Gmail threads a reply by the first email's Message-ID (Resend's comes from its sent list)
+    const mid = e.first.mid || (sentR.emails || []).find(x => addrOf(x.to) === email && plainSubj(x.subject) === plainSubj(e.first.subj))?.message_id || "";
+    out.push(Object.assign(recipients.find(x => x.email === email) || enrich({email}), {fu: n, fuText: text, orig: e.first, inReplyTo: mid ? (mid.startsWith("<") ? mid : `<${mid}>`) : ""}));
+  }
+  return out;
+}
+async function showFuDue() {
+  const l = await dueFollowUps().catch(() => null);
+  $("fu-due").textContent = l == null ? "" : !$("fu-on").checked ? "" : l.length ? `📬 ${l.length} follow-up(s) due now. They go out when you press Start sending.` : "No follow-ups due right now.";
+}
+for (const id of ["fu-on", "fu1", "fu2", "fu1-days", "fu2-days"]) $(id).addEventListener("change", () => { saveDraft(); showFuDue(); });
+
+// ===== 5) working hours in THEIR country, guessed from the website ending (.de → Germany); .com etc. → US East =====
+const TZ = {de: "Europe/Berlin", at: "Europe/Vienna", ch: "Europe/Zurich", uk: "Europe/London", ie: "Europe/Dublin", fr: "Europe/Paris", es: "Europe/Madrid",
+  it: "Europe/Rome", nl: "Europe/Amsterdam", be: "Europe/Brussels", dk: "Europe/Copenhagen", se: "Europe/Stockholm", no: "Europe/Oslo", fi: "Europe/Helsinki",
+  pl: "Europe/Warsaw", cz: "Europe/Prague", pt: "Europe/Lisbon", gr: "Europe/Athens", au: "Australia/Sydney", nz: "Pacific/Auckland", ca: "America/Toronto",
+  br: "America/Sao_Paulo", mx: "America/Mexico_City", in: "Asia/Kolkata", sg: "Asia/Singapore", za: "Africa/Johannesburg", ng: "Africa/Lagos", ae: "Asia/Dubai", jp: "Asia/Tokyo"};
+const tzOf = r => TZ[(host(r.site) || r.email.split("@")[1] || "").split(".").pop()] || "America/New_York";  // ponytail: a .com in London counts as US time
+const inWorkHours = r => { const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", {timeZone: tzOf(r), weekday: "short", hour: "numeric", hourCycle: "h23"})
+  .formatToParts(new Date()).map(x => [x.type, x.value])); return !/Sat|Sun/.test(p.weekday) && +p.hour >= 8 && +p.hour < 17; };
+// safe daily amount per account while a domain is new (each account's own limit still applies if lower)
+const capOf = a => Math.min(a.cap, Number($("safecap").value) || Infinity);
 let sending = false, wake = null;
 const sleep = ms => new Promise(res => { const t = setTimeout(res, ms); wake = () => { clearTimeout(t); res(); }; });
 $("send-stop").onclick = () => { sending = false; wake?.(); };
 $("send-start").onclick = async () => {
   parseRecips();
-  const blocked = dneSet(), stores = sentStores(), all = onePerStore(recipients.filter(r => !blocked.has(r.email) && !alreadyDone(r, stores)));
+  const blocked = dneSet(), stores = sentStores(), all = onePerStore(recipients.filter(r => !blocked.has(r.email) && !wrongDesk(r.email) && !alreadyDone(r, stores)));
   if ($("freefirst").checked) all.sort((a, b) => isFreeMail(b.email) - isFreeMail(a.email));
   const missing = plan.find(p => !templates().some(t => t.name === p.tpl));
   if (missing) return setMsg("send-msg", `Template "${missing.tpl}" in your rounds was deleted — pick another one.`, "err");
-  const queue = assignPlan(all);
+  let fus = [];
+  try { setMsg("send-msg", "Checking who replied…"); fus = await dueFollowUps(); } catch (e) { return setMsg("send-msg", "Couldn't check who replied, so nothing was sent: " + e.message, "err"); }
+  const fresh = assignPlan(all), queue = [...fus, ...fresh];
+  if (fus.length && /\{\{/.test(compose(fus[0]).body)) return setMsg("send-msg", "A {{field}} in your follow-up isn't filled in. Use {{first_name|there}} style defaults.", "err");
   if (!queue.length) return setMsg("send-msg", plan.length ? "Every round is already done — add a round or press Reset progress." : "No one left to email (everyone is already emailed or on the do-not-email list).", "err");
-  for (const r of plan.length ? [...new Map(queue.map(r => [r.tpl.name, r])).values()] : [queue[0]]) {  // one check per template used
+  for (const r of plan.length ? [...new Map(fresh.map(r => [r.tpl.name, r])).values()] : fresh.slice(0, 1)) {  // one check per template used
     const problem = checkReady(r); if (problem) return setMsg("send-msg", problem, "err"); }
   const [lo, hi] = ($("delay").value.match(/\d+/g) || [60, 120]).map(Number), cap = Number($("cap").value) || Infinity;
   const pool = sendingPool(), full = new Set(), broken = new Set();
-  const rounds = plan.length ? "\n\n" + plan.map((p, n) => `Round ${n + 1}: "${p.tpl}" → ${queue.filter(r => r.round === p).length} people`).join("\n") : "";
+  const rounds = (plan.length ? "\n\n" + plan.map((p, n) => `Round ${n + 1}: "${p.tpl}" → ${fresh.filter(r => r.round === p).length} people`).join("\n") : "")
+    + (fus.length ? `\n\nFirst: ${fus.length} follow-up(s) to people who haven't replied.` : "");
   if (!confirm(`Send to ${queue.length} people? Uses ${pool[0].label} first; when it's full for the day the next account takes over.${rounds}`)) return;
   sending = true; $("send-start").disabled = $("send-test").disabled = true; $("send-stop").disabled = false;
   let sent = 0, fails = 0, done = 0, consecutiveFails = 0, stopReason = "", i = 0;
   const runSent = [];
   // first account in your order that still has room today (and works) — fill it, then move to the next
-  const pick = () => pool.find(a => !full.has(a.id) && !broken.has(a.id) && sentTodayVia(a.label) < a.cap) || null;
+  const pick = () => pool.find(a => !full.has(a.id) && !broken.has(a.id) && sentTodayVia(a.label) < capOf(a)) || null;
   // daily counts reset at midnight UTC (that's when the providers reset too); +1 min margin
   const waitForTomorrow = async why => {
     const until = new Date(); until.setUTCHours(24, 1, 0, 0);
@@ -909,15 +983,21 @@ $("send-start").onclick = async () => {
   };
   while (i < queue.length && sending) {
     if (tooManyBounces(runSent, bouncedNow)) { stopReason = "Stopped to protect your domain: 3 of your latest 20 emails bounced. Check your list before sending more."; break; }
+    if ($("workhours").checked) {  // next person whose working day it is; nobody → wait
+      const j = queue.findIndex((x, k) => k >= i && inWorkHours(x));
+      if (j < 0) { setMsg("send-msg", `Outside working hours for everyone left (Mon–Fri, 8 AM–5 PM their time). ${sent} sent so far. Checking again every 15 minutes, keep this tab open.`); await sleep(15 * 60000); continue; }
+      if (j > i) queue.splice(i, 0, queue.splice(j, 1)[0]);
+    }
     const r = queue[i];
-    if (alreadyDone(r) || dneSet().has(r.email)) { i++; done++; continue; }  // bounced/spam-flagged meanwhile
+    if ((!r.fu && alreadyDone(r)) || dneSet().has(r.email)) { i++; done++; continue; }  // bounced/spam-flagged meanwhile
     const sentToday = log.filter(l => l.date === today() && l.status === "sent").length;
     if (sentToday >= cap) { await waitForTomorrow(`Your overall limit of ${cap} for today is reached.`); continue; }
     let d, a;
     while ((a = pick())) {  // a full or broken account hands the SAME person to the next account
       setMsg("send-msg", `Sending to ${r.email} via ${a.label}…`);
       const m = compose(r);
-      d = await post("/api/send", {account_id: a.id, to: r.email, subject: m.subject, body: m.body, reply_to: replyAddr(), signature: sigPayload(), plain: $("plainmail").checked}, 1);
+      d = await post("/api/send", {account_id: a.id, to: r.email, subject: m.subject, body: m.body, reply_to: replyAddr(), signature: sigPayload(), plain: $("plainmail").checked,
+                                   check: true, in_reply_to: r.inReplyTo || ""}, 1);
       if (d.error && /daily|limit|quota|exceeded/i.test(d.error)) { full.add(a.id); record(r.email, "failed", "account full today: " + d.error, a.label); continue; }
       if (d.error && /Login refused|connect to|API key|domain|verified|not allowed|suspend/i.test(d.error)) { broken.add(a.id); record(r.email, "failed", "account skipped: " + d.error, a.label); continue; }
       break;
@@ -926,10 +1006,11 @@ $("send-start").onclick = async () => {
       if (broken.size === pool.length) { stopReason = "None of your accounts can send right now — check them in step 1 (details in the log)."; break; }
       await waitForTomorrow("All accounts reached today's limit."); continue;
     }
+    if (d.skipped) { record(r.email, "skipped", d.skipped, a.label); addDne(r.email); i++; done++; $("send-fill").style.width = (100 * done / queue.length) + "%"; continue; }
     if (d.error) {
       fails++; consecutiveFails++; record(r.email, "failed", d.error, a.label);
       if (consecutiveFails >= 5) { stopReason = "Stopped after 5 failures in a row: " + d.error; break; }
-    } else { sent++; runSent.push(r.email); consecutiveFails = 0; { const m = compose(r); record(r.email, "sent", "", a.label, m.subject, m.body, d.message_id);
+    } else { sent++; runSent.push(r.email); consecutiveFails = 0; { const m = compose(r); record(r.email, "sent", r.fu ? "follow-up " + r.fu : "", a.label, m.subject, m.body, d.message_id); if (r.fu) { log[0].fu = r.fu; store.set("scrapeer-log", log); }
       if (host(r.site)) { const s = sentMap(); s["site:" + host(r.site)] = today(); store.set("scrapeer-sent", s); }
       if (r.round) { r.round.done = (r.round.done || 0) + 1; saveDraft(); renderPlan(); } } }
     i++; done++;
@@ -944,7 +1025,7 @@ $("send-start").onclick = async () => {
   else if (sending && done === queue.length) setMsg("send-msg", `Done — ${sent} sent, ${fails} failed.`, fails ? "err" : "ok");
   else if (!sending) setMsg("send-msg", `Paused — ${sent} sent. Press Start to continue with the rest.`);
   sending = false; $("send-start").disabled = $("send-test").disabled = false; $("send-stop").disabled = true;
-  parseRecips();
+  parseRecips(); showFuDue();
 };
 
 /* ---------- INBOX: WhatsApp/Spike-style chats — one chat per (sending account, person) ---------- */
@@ -1242,7 +1323,7 @@ async function pollEvents() {
     else if (e.type === "email.complained") toast(`⚠ ${who} marked you as spam`, "Added to do-not-email.", key);
     if (e.type === "email.bounced" || e.type === "email.complained") {  // protect the account: never email them again
       bouncedNow.add(who.toLowerCase());
-      const list = $("dne").value.trim(); if (!list.toLowerCase().includes(who)) { $("dne").value = (list ? list + "\n" : "") + who; store.set("scrapeer-dne", $("dne").value); }
+      addDne(who);
     }
   }
   if (!first && inboxChanged) loadInbox(true);  // updates the unread count on the Inbox tab, whichever tab you're on
@@ -1250,7 +1331,7 @@ async function pollEvents() {
   else if (d.events.length) { renderConvos(); if (activeKey) renderThread(); }
 }
 function startLive() {
-  clearInterval(liveTimer); pollEvents(); loadInbox(true);  // starts the inbox auto-refresh right after sign-in
+  clearInterval(liveTimer); pollEvents(); loadInbox(true); showFuDue();  // starts the inbox auto-refresh right after sign-in
   // every 10s while you're looking, every 40s in the background (pop-ups/desktop alerts still arrive)
   let n = 0; liveTimer = setInterval(() => { n++; if (!document.hidden || n % 4 === 0) pollEvents(); if (!$("inbox").hidden) { renderConvos(); if (activeKey) renderThread(); } }, 10000);
 }
@@ -1393,7 +1474,8 @@ $("tpl-del").onclick = () => {
   store.set("scrapeer-templates", store.get("scrapeer-templates", []).filter(x => x.name !== t.name)); renderTemplates();
 };
 function saveDraft() { store.set("scrapeer-draft", {recips: $("recips").value, subject: $("subject").value, body: $("body").value,
-  footer: $("footer").value, delay: $("delay").value, cap: $("cap").value, plan}); }
+  footer: $("footer").value, delay: $("delay").value, cap: $("cap").value, plan, safecap: $("safecap").value, workhours: $("workhours").checked,
+  fuOn: $("fu-on").checked, fu1: $("fu1").value, fu2: $("fu2").value, fu1d: $("fu1-days").value, fu2d: $("fu2-days").value}); }
 function restoreUI() {
   log = store.get("scrapeer-log", []);
   if (!Object.keys(store.get("scrapeer-counts", {})).length && log.length) store.set("scrapeer-counts", countsFromLog(log));  // first load: build from history
@@ -1402,6 +1484,11 @@ function restoreUI() {
   if (d.cap === "50") d.cap = "";  // old default would silently cap rotation at 50
   for (const k of ["recips", "subject", "body", "footer", "delay", "cap"]) if (d[k] != null) $(k).value = d[k];
   plan = Array.isArray(d.plan) ? d.plan.filter(p => p && p.tpl) : []; renderPlan();
+  if (d.safecap != null) $("safecap").value = d.safecap;
+  if (d.workhours != null) $("workhours").checked = d.workhours;
+  if (d.fuOn != null) $("fu-on").checked = d.fuOn;
+  $("fu1").value = d.fu1 ?? FU_DEFAULT[0]; $("fu2").value = d.fu2 ?? FU_DEFAULT[1];
+  if (d.fu1d) $("fu1-days").value = d.fu1d; if (d.fu2d) $("fu2-days").value = d.fu2d;
   if (d.delay === "15-30") $("delay").value = "60-120";  // old default: too fast for a new domain
   $("dne").value = store.get("scrapeer-dne", "");
   const acc = local.get("scrapeer-acc", null);

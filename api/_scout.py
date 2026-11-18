@@ -64,9 +64,11 @@ PLACEHOLDER_LOCALS = {"name", "email", "you", "your", "yourname", "youremail", "
 # real inboxes, but never the person who decides on marketing (privacy@ → "data request" auto-reply, careers@ → HR)
 WRONG_DESK = re.compile(r"privacy|gdpr|dpo|dataprotection|legal|dmca|copyright|compliance|careers|jobs|recruit|hiring|"
                         r"talent|^hr$|newsletter|subscribe|news$|accessibility|investor|^ir$|security|ethics|fraud|"
-                        r"no\.?-?reply|do\.?-?not\.?-?reply|returns?$")
+                        r"no\.?-?reply|do\.?-?not\.?-?reply|returns?$|datenschutz|impressum|imprint|widerruf|revocation|retour|"
+                        r"refund|^rma$|abuse|karriere|bewerbung|billing|invoice|rechnung|buchhaltung|accounting|^factur")
 # help-desk inboxes: answered by ticket software ("Case 0233 received") and support agents, not decision makers
-SUPPORT = re.compile(r"support|help|service|care|^c[sx]$|custserv|orders?$|tickets?|^returns?|warranty|claims|atendimento|feedback")
+SUPPORT = re.compile(r"support|help|service|care|^c[sx]$|custserv|orders?$|tickets?|^returns?|warranty|claims|atendimento|feedback|soporte|suporte|supporto|hilfe|ayuda|"
+                     r"servicio|kundendienst|atencion|garantie|reklamation|bestellung|versand|shipping|delivery")
 NOT_TLD = ("png", "jpg", "jpeg", "gif", "svg", "webp", "js", "css", "ico", "woff", "woff2", "mp4", "pdf")
 
 

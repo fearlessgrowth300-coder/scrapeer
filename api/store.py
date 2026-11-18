@@ -22,7 +22,10 @@ DANGLING = {"", "for", "with", "and", "of", "the", "a", "an", "in", "to", "by", 
 
 def short(title, words=6):
     title = re.split(r"\s[-|–—:]\s|,|\(", htmllib.unescape(title))[0].strip()
+    title = re.sub(r"^(copy of|kopie von|copia de|copie de)\s+", "", title, flags=re.I)  # Shopify's duplicated products
     cut = title.split()[:words]
+    while len(cut) > 1 and re.fullmatch(r"[\d.,/]+", cut[-1]):  # "Riesling trocken 0" (from "0,75 l") -> "Riesling trocken"
+        cut.pop()
     while len(cut) > 1 and cut[-1].lower().strip(".&+") in DANGLING:  # "... aus Granit für" -> "... aus Granit"
         cut.pop()
     return " ".join(cut)
