@@ -15,7 +15,8 @@ self.addEventListener("notificationclick", e => {
   const url = e.notification.data?.url || "/#inbox";
   e.waitUntil((async () => {
     const open = await self.clients.matchAll({type: "window", includeUncontrolled: true});
-    if (open.length) { open[0].postMessage({open: "inbox"}); return open[0].focus(); }
+    const who = decodeURIComponent((url.split("#inbox=")[1] || ""));
+    if (open.length) { open[0].postMessage({open: "inbox", who}); return open[0].focus(); }
     return self.clients.openWindow(url);
   })());
 });

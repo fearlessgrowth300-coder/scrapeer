@@ -77,7 +77,9 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:4px 0 10
 .chat-list-head{display:flex;gap:8px;padding:12px}
 .chat-list-head input{flex:1;width:auto;border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:var(--bg);color:var(--ink);font:14px system-ui,sans-serif}
 .chat-stats{display:flex;flex-wrap:wrap;gap:6px;padding:0 12px 8px;font-size:12px;color:var(--muted)}
-.chat-stats span{background:var(--bg);border:1px solid var(--line);border-radius:99px;padding:2px 8px}
+.chat-stats button{background:var(--bg);border:1px solid var(--line);border-radius:99px;padding:2px 8px;font:inherit;color:var(--muted);cursor:pointer}
+.chat-stats button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.chat-stats button[aria-pressed="true"] b{color:var(--bg)}
 .chat-stats b{color:var(--ink)}
 .convos{overflow-y:auto;flex:1}
 .convo{display:flex;gap:10px;width:100%;text-align:left;padding:10px 12px;border:0;border-radius:0;background:transparent;color:var(--ink);font-weight:400;border-bottom:1px solid var(--line)}
@@ -962,6 +964,17 @@ const STATUS_WORD = {delivered: "Delivered", opened: "Opened", clicked: "Clicked
   complained: "Marked as spam", failed: "Failed", delivery_delayed: "Delayed", sent: "Sent", queued: "Sent"};
 const chatKey = (accId, email) => accId + "|" + email;
 const serviceOf = c => (accounts.find(a => a.id === c.account_id)?.label || c.via || "").split(" · ")[0] || "Email";
+let ibFilter = "", wantOpen = "";
+// which chats each stat chip shows (same rules as the counts)
+const IB_FILTERS = {
+  Sent: c => c.msgs.some(m => m.dir === "out"),
+  Delivered: c => c.msgs.some(m => m.dir === "out" && ["delivered", "opened", "clicked"].includes(statuses(c).get(m))),
+  Opened: c => c.msgs.some(m => m.dir === "out" && ["opened", "clicked"].includes(statuses(c).get(m))),
+  Replied: c => c.msgs.some(m => m.dir === "in" && !autoKind(m)),
+  "Bounced/spam": c => c.msgs.some(m => m.dir === "out" && ["bounced", "complained", "failed"].includes(statuses(c).get(m))) || convoAuto(c) === "bounce"};
+const keyOfEmail = who => convos.has(who) ? who : [...convos.values()].filter(c => c.email === who).sort((a, b) => b.last.at - a.last.at)[0]?.key;
+// opened from a notification / toast: show that person's chat (after the inbox has loaded their reply)
+function openByEmail(who) { showTab("inbox"); wantOpen = String(who || "").toLowerCase(); loadInbox(true); }
 let convos = new Map(), activeKey = null, bodies = {}, pending = [], inboxTimer = null, inboxBusy = false;
 const readSet = () => new Set(store.get("scrapeer-read", []));
 // help-desk "we got your email" replies, out-of-office, newsletter sign-ups and bounces (keep in sync with AUTO in api/hook.py)
@@ -1036,27 +1049,34 @@ async function loadInbox(quiet) {
   const count = k => outs.filter(s => k.includes(s)).length;
   $("ib-stats").innerHTML = [["Sent", outs.length], ["Delivered", count(["delivered", "opened", "clicked"])], ["Opened", count(["opened", "clicked"])],
     ["Replied", [...map.values()].filter(c => c.msgs.some(m => m.dir === "in" && !autoKind(m))).length], ["Bounced/spam", count(["bounced", "complained", "failed"])]]
-    .map(([l, v]) => `<span><b>${v}</b> ${l}</span>`).join("");
+    .map(([l, v]) => `<button type="button" data-f="${l}" aria-pressed="${ibFilter === l}" title="Show only these"><b>${v}</b> ${l}</button>`).join("");
   renderConvos();
+  if (wantOpen) { const k = keyOfEmail(wantOpen); if (k) { wantOpen = ""; openConvo(k); } }
   if (activeKey && convos.has(activeKey)) { renderThread(); fetchBodies(); }
 }
 $("ib-refresh").onclick = () => loadInbox();
 $("ib-search").oninput = renderConvos;
+$("ib-stats").onclick = e => {
+  const b = e.target.closest("[data-f]"); if (!b) return;
+  ibFilter = ibFilter === b.dataset.f ? "" : b.dataset.f;  // tap again to show everyone
+  for (const x of $("ib-stats").querySelectorAll("[data-f]")) x.setAttribute("aria-pressed", x.dataset.f === ibFilter);
+  renderConvos();
+};
 
 function renderConvos() {
   const q = $("ib-search").value.trim().toLowerCase();
   const showAuto = $("ib-auto").checked, nAuto = [...convos.values()].filter(convoAuto).length;
   $("ib-auto-n").textContent = nAuto ? `(${nAuto})` : "";
   const list = [...convos.values()].filter(c => !q || c.email.includes(q) || c.name.toLowerCase().includes(q) || serviceOf(c).toLowerCase().includes(q))
-    .filter(c => showAuto || !convoAuto(c) || c.key === activeKey)
-    .sort((a, b) => b.last.at - a.last.at);
+    .filter(c => ibFilter ? IB_FILTERS[ibFilter](c) : showAuto || !convoAuto(c) || c.key === activeKey)
+    .sort((a, b) => (b.unread > 0) - (a.unread > 0) || b.last.at - a.last.at);  // unread replies stay on top
   $("ib-convos").innerHTML = list.map(c => {
     const l = c.last, prev = bodies[l.id] || l.text || l.subject || (l.dir === "in" ? "New reply" : ""), st = statuses(c);
     return `<button type="button" class="convo${c.unread ? " has-unread" : ""}" data-key="${esc(c.key)}" aria-current="${c.key === activeKey}">
       <div class="avatar${isReading(c) ? " live" : ""}" aria-hidden="true">${esc(c.name[0].toUpperCase())}</div>
       <div class="convo-body"><div class="convo-top"><span class="convo-name">${esc(c.name)} <span class="hint" style="margin:0;font-weight:400">· ${esc(serviceOf(c))}</span></span><span class="convo-time">${{auto: "🤖 Auto-reply · ", bounce: "⚠ Bounced · "}[convoAuto(c)] || ""}${l.at ? listTime(l.at) : ""}</span></div>
       <div class="convo-bottom"><span class="convo-prev">${isReading(c) ? '<span class="reading">👀 Reading now</span> · ' : ""}${l.dir === "out" ? (TICK[st.get(l)] || "✓") + " " : ""}${esc(String(prev).split("\n")[0])}</span>${c.unread ? `<span class="unread">${c.unread}</span>` : ""}</div></div></button>`;
-  }).join("") || `<p class="empty" style="padding:30px 12px">${q ? "No matches." : "No conversations yet — people you email show up here."}</p>`;
+  }).join("") || `<p class="empty" style="padding:30px 12px">${q || ibFilter ? "No matches." : "No conversations yet — people you email show up here."}</p>`;
 }
 $("ib-auto").onchange = renderConvos;
 $("chat-del").onclick = () => {
@@ -1180,8 +1200,7 @@ function toast(title, sub, key) {
   const t = Object.assign(document.createElement("button"), {type: "button", className: "toast"});
   const who = (key || "?").split("|").pop();
   t.innerHTML = `<div class="avatar" aria-hidden="true" style="width:34px;height:34px">${esc(who[0].toUpperCase())}</div><div><b>${esc(title)}</b><div class="hint">${esc(sub)}</div></div>`;
-  t.onclick = () => { t.remove(); if (key) { showTab("inbox"); setTimeout(() => openConvo(convos.has(key) ? key
-    : [...convos.values()].filter(c => c.email === who).sort((a, b) => b.last.at - a.last.at)[0]?.key), 800); } };
+  t.onclick = () => { t.remove(); if (key) openByEmail(convos.has(key) ? key : who); };
   $("toasts").append(t); setTimeout(() => t.remove(), 12000);
   if (document.hidden && "Notification" in window && Notification.permission === "granted") {
     const n = new Notification(title, {body: sub, tag: (key || "") + title}); n.onclick = () => { window.focus(); t.onclick(); n.close(); };
@@ -1237,7 +1256,7 @@ function startLive() {
 }
 // phone/desktop notifications for new replies, even when the app is closed (server sends them via Web Push)
 const swReady = "serviceWorker" in navigator ? navigator.serviceWorker.register("/sw.js").then(() => navigator.serviceWorker.ready).catch(() => null) : Promise.resolve(null);
-navigator.serviceWorker?.addEventListener("message", e => { if (e.data?.open === "inbox") showTab("inbox"); });
+navigator.serviceWorker?.addEventListener("message", e => { if (e.data?.open === "inbox") e.data.who ? openByEmail(e.data.who) : showTab("inbox"); });
 async function subscribePush() {
   const reg = await swReady;
   if (!reg || !reg.pushManager || !vapidKey) return false;
@@ -1483,7 +1502,10 @@ async function enterApp(session) {
   }
   $("alerts").hidden = !("Notification" in window) || Notification.permission === "granted";
   if ("Notification" in window && Notification.permission === "granted") subscribePush();  // keep this device registered
-  if (location.hash === "#inbox") { showTab("inbox"); history.replaceState(null, "", "/"); }  // opened from a notification
+  if (location.hash.startsWith("#inbox")) {  // opened from a notification: #inbox or #inbox=person@site.com
+    const who = decodeURIComponent(location.hash.split("=")[1] || "");
+    who ? openByEmail(who) : showTab("inbox"); history.replaceState(null, "", "/");
+  }
   startLive();
 }
 

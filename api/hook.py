@@ -12,7 +12,7 @@ import re
 import sys
 import time
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _auth import Bad, db, decrypt, hook_token  # noqa: E402
@@ -105,7 +105,8 @@ def handle(account_id, headers, raw, token=""):
     if ev["type"] == "email.received" and not AUTO.search(str(d.get("subject") or "")) and not BOT_SENDERS.search(contact):
         # every service's replies land here (shared reply address), so one place to notify — real replies only
         try:
-            notify(rows[0]["user_id"], f"💬 New reply from {contact}", str(d.get("subject") or ""))
+            notify(rows[0]["user_id"], f"💬 New reply from {contact}", str(d.get("subject") or ""),
+                   "/#inbox=" + quote(contact))
         except Exception:
             pass  # the reply is saved; a missed notification must not make Resend retry
 
