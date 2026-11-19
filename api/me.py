@@ -37,12 +37,12 @@ def mailjet_hook(acct, url):
     if code != 200:
         return f"Mailjet refused the API key/secret ({code} {str((data or {}).get('ErrorMessage') or '')[:120]})"
     have = {d.get("EventType"): d for d in (data or {}).get("Data", [])}
-    busy = []
+    busy, mine = [], "/api/hook?" + url.split("?")[1].split("&")[0]  # ours at any address: /api/hook?a=<account id>
     for et in MJ_EVENTS:
         cur = have.get(et)
         if cur and cur.get("Url") == url:
             continue
-        if cur and APP_URL not in str(cur.get("Url")):
+        if cur and mine not in str(cur.get("Url")):
             busy.append(et)  # already used by another app: leave it alone
             continue
         if cur:
@@ -79,6 +79,10 @@ def brevo_hook(acct, url):
         return brevo_reason(code, data)
     if any(w.get("url") == url for w in (data or {}).get("webhooks", [])):
         return ""
+    mine = "/api/hook?" + url.split("?")[1].split("&")[0]
+    for w in (data or {}).get("webhooks", []):  # ours at the app's old address
+        if mine in str(w.get("url")):
+            _http("DELETE", f"https://api.brevo.com/v3/webhooks/{w.get('id')}", h)
     code, data = _http("POST", "https://api.brevo.com/v3/webhooks", h,
                        {"url": url, "description": "Scrapeer ticks & pop-ups", "events": BREVO_EVENTS, "type": "transactional"})
     return "" if code < 400 else brevo_reason(code, data)
@@ -92,7 +96,7 @@ def ensure_hooks(user):
     for r in db("GET", "scrapeer_accounts", {"user_id": f"eq.{user['id']}", "provider": "in.(resend,mailjet,brevo)",
                                              "select": "id,label,provider,secret"}) or []:
         acct = decrypt(r["secret"])
-        if acct.get("hook_secret") or acct.get("hook_ok"):
+        if (acct.get("hook_secret") or acct.get("hook_ok")) and acct.get("hook_app", "https://scrapeer-brown.vercel.app") == APP_URL:
             out.append({"label": r["label"], "ok": True})
             continue
         if r["provider"] in ("mailjet", "brevo"):
@@ -101,7 +105,7 @@ def ensure_hooks(user):
             if err and not err.endswith("to another app"):
                 out.append({"label": r["label"], "ok": False, "error": err})
                 continue
-            acct["hook_ok"] = True
+            acct["hook_ok"], acct["hook_app"] = True, APP_URL
             db("PATCH", "scrapeer_accounts", {"id": f"eq.{r['id']}", "user_id": f"eq.{user['id']}"},
                body={"secret": encrypt(acct)}, prefer="return=minimal")
             out.append({"label": r["label"], "ok": True, "new": True, **({"warning": err} if err else {})})
@@ -109,6 +113,9 @@ def ensure_hooks(user):
         key, endpoint = acct.get("api_key", ""), f"{APP_URL}/api/hook?a={r['id']}"
         code, data = resend_api(key, "GET", "/webhooks")
         hook = next((w for w in (data or {}).get("data", []) if w.get("endpoint") == endpoint), None) if code == 200 else None
+        for w in (data or {}).get("data", []) if code == 200 else []:  # ours at the app's old address
+            if w.get("endpoint") != endpoint and f"/api/hook?a={r['id']}" in str(w.get("endpoint")):
+                resend_api(key, "DELETE", f"/webhooks/{w['id']}")
         if hook:  # already registered earlier (e.g. secret lost): fetch its secret
             code, full = resend_api(key, "GET", f"/webhooks/{hook['id']}")
             hook = {**hook, **(full or {})} if code == 200 else hook
@@ -120,7 +127,7 @@ def ensure_hooks(user):
         if not (hook or {}).get("signing_secret"):
             out.append({"label": r["label"], "ok": False, "error": "Resend didn't return a signing secret"})
             continue
-        acct.update(hook_id=hook.get("id"), hook_secret=hook["signing_secret"])
+        acct.update(hook_id=hook.get("id"), hook_secret=hook["signing_secret"], hook_app=APP_URL)
         db("PATCH", "scrapeer_accounts", {"id": f"eq.{r['id']}", "user_id": f"eq.{user['id']}"},
            body={"secret": encrypt(acct)}, prefer="return=minimal")
         out.append({"label": r["label"], "ok": True, "new": True})
