@@ -190,6 +190,21 @@ def handle(body, user):
                    prefer="return=representation,resolution=merge-duplicates")
         return {"account": public_row(saved[0])}
 
+    if action == "update_account":  # change the sender name / daily limit without adding the account again
+        rows = db("GET", "scrapeer_accounts", {"id": f"eq.{body.get('id')}", "user_id": f"eq.{user['id']}", "select": "*"})
+        if not rows:
+            raise Bad("Account not found.")
+        r, name = rows[0], " ".join(str(body.get("from_name") or "").split())[:80]
+        try:
+            cap = max(1, min(int(body.get("cap") or r["cap"]), 100000))
+        except (TypeError, ValueError):
+            raise Bad("The daily limit must be a number.")
+        acct = decrypt(r["secret"])
+        acct["from_name"] = name
+        saved = db("PATCH", "scrapeer_accounts", {"id": f"eq.{r['id']}", "user_id": f"eq.{user['id']}"}, prefer="return=representation",
+                   body={"secret": encrypt(acct), "cap": cap, "public": {**(r.get("public") or {}), "from_name": name}})
+        return {"account": public_row(saved[0])}
+
     if action == "remove_account":
         db("DELETE", "scrapeer_accounts", {"id": f"eq.{body.get('id')}", "user_id": f"eq.{user['id']}"}, prefer="return=minimal")
         return {"ok": True}

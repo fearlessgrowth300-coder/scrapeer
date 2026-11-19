@@ -631,7 +631,8 @@ function renderPreview() {
   const r = recipients[pvIdx];
   if (!r) { $("pv-to").textContent = "Add recipients to see a preview"; $("pv-subj").textContent = ""; $("pv-body").textContent = ""; $("pv-pos").textContent = ""; return; }
   const m = compose(r), lang = langOf(r), tr = $("translate").checked && lang !== "en";
-  const where = `${countryOf(r)} · ${inWorkHours(r) ? "working hours now" : "outside working hours now"}`;
+  const nw = !inWorkHours(r) && nextWindow([r]);
+  const where = `${regionName(countryOf(r))} · ${nw ? `outside working hours now, sends ${whenText(nw.at)} your time` : "working hours now"}`;
   $("pv-to").textContent = `To: ${r.email} · ${where}` + (tr ? ` · sent in ${LANG_NAME(lang)}` : "");
   $("pv-subj").textContent = m.subject || "(no subject)"; $("pv-body").textContent = m.body;
   $("pv-pos").textContent = `${pvIdx + 1} of ${recipients.length}`;
@@ -750,7 +751,7 @@ function renderAccounts() {
   const live = a => a.provider === "smtp" ? "" : hookStatus[a.label] === "ok" ? ' <span class="pill sent" title="Ticks, Reading now and pop-ups are connected">live ✓</span>'
     : hookStatus[a.label] ? `<div class="hint" style="margin:2px 0 0;color:var(--err)">Live ticks off: ${esc(hookStatus[a.label])}</div>` : "";
   $("acct-list").innerHTML = pool.map((a, i) => `<tr><td class="email">${i + 1}. ${esc(a.label)}${a === next ? ' <span class="pill sent">in use</span>' : sentTodayVia(a.label) >= capOf(a) ? ' <span class="pill low">full today</span>' : ""}${live(a)}</td>
-    <td>${sentTodayVia(a.label)} / ${capOf(a)}</td><td style="white-space:nowrap">${i ? `<button class="ghost" type="button" data-up="${esc(a.id)}" aria-label="Use earlier" title="Use this one earlier">↑</button> ` : ""}<button class="ghost" type="button" data-rm="${esc(a.id)}" aria-label="Remove">✕</button></td></tr>`).join("")
+    <td>${sentTodayVia(a.label)} / ${capOf(a)}</td><td style="white-space:nowrap">${i ? `<button class="ghost" type="button" data-up="${esc(a.id)}" aria-label="Use earlier" title="Use this one earlier">↑</button> ` : ""}<button class="ghost" type="button" data-ed="${esc(a.id)}" aria-label="Edit name and daily limit" title="Edit the name people see and the daily limit">✎</button> <button class="ghost" type="button" data-rm="${esc(a.id)}" aria-label="Remove">✕</button></td></tr>`).join("")
     || `<tr><td colspan="3" class="empty" style="padding:14px">No accounts added yet.</td></tr>`;
   const total = pool.reduce((s, a) => s + capOf(a), 0);
   $("acct-total").textContent = pool.length ? `${pool.length} account(s) · up to ${total} emails/day · used in this order: when one is full the next takes over` : "";
@@ -761,6 +762,15 @@ $("acct-list").onclick = async e => {
     const ids = sendingPool().map(a => a.id), i = ids.indexOf(up);
     if (i > 0) { [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]]; store.set("scrapeer-order", ids); renderAccounts(); }
     return;
+  }
+  const ed = accounts.find(x => x.id === e.target.dataset?.ed);
+  if (ed) {  // the "from" name people see in their inbox (e.g. Adebayo → Adebayo from Legacy Falcon) + daily limit
+    const name = prompt(`Name people see when ${ed.from || ed.label} emails them:`, ed.from_name || ""); if (name == null) return;
+    const cap = prompt("Daily limit for this account:", ed.cap); if (cap == null) return;
+    const d = await post("/api/me", {action: "update_account", id: ed.id, from_name: name, cap}, 1);
+    if (d.error) return setMsg("acc-msg", d.error, "err");
+    accounts = accounts.map(x => x.id === ed.id ? d.account : x); renderAccounts();
+    return setMsg("acc-msg", `✓ Saved. Emails from ${ed.label} now show "${d.account.from_name || ed.from}".`, "ok");
   }
   const a = accounts.find(x => x.id === e.target.dataset?.rm); if (!a) return;
   if (!confirm("Remove " + a.label + "?")) return;
@@ -976,8 +986,15 @@ async function localized(r) {
   }
   return trCache.get(k);
 }
-const inWorkHours = r => { const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", {timeZone: tzOf(r), weekday: "short", hour: "numeric", hourCycle: "h23"})
-  .formatToParts(new Date()).map(x => [x.type, x.value])); return !/Sat|Sun/.test(p.weekday) && +p.hour >= 8 && +p.hour < 17; };
+const inWorkHours = (r, at = new Date()) => { const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", {timeZone: tzOf(r), weekday: "short", hour: "numeric", hourCycle: "h23"})
+  .formatToParts(at).map(x => [x.type, x.value])); return !/Sat|Sun/.test(p.weekday) && +p.hour >= 8 && +p.hour < 17; };
+// the first moment (15-minute steps, up to 8 days ahead) when someone in the list is in their working hours
+const nextWindow = list => { const byTz = new Map(list.map(r => [tzOf(r), r]));
+  for (let t = Math.ceil(Date.now() / 9e5) * 9e5; t < Date.now() + 8 * 864e5; t += 9e5)
+    for (const r of byTz.values()) if (inWorkHours(r, new Date(t))) return {at: t, r};
+  return null; };
+const whenText = t => new Date(t).toLocaleString([], {weekday: "long", hour: "numeric", minute: "2-digit"});
+const regionName = c => { try { return new Intl.DisplayNames(["en"], {type: "region"}).of(c); } catch { return c; } };
 // safe daily amount per account while a domain is new (each account's own limit still applies if lower)
 const capOf = a => Math.min(a.cap, Number($("safecap").value) || Infinity);
 let sending = false, wake = null;
@@ -1023,7 +1040,12 @@ $("send-start").onclick = async () => {
     if (tooManyBounces(runSent, bouncedNow)) { stopReason = "Stopped to protect your domain: 3 of your latest 20 emails bounced. Check your list before sending more."; break; }
     if ($("workhours").checked) {  // next person whose working day it is; nobody → wait
       const j = queue.findIndex((x, k) => k >= i && inWorkHours(x));
-      if (j < 0) { setMsg("send-msg", `Outside working hours for everyone left (Mon–Fri, 8 AM–5 PM their time). ${sent} sent so far. Checking again every 15 minutes, keep this tab open.`); await sleep(15 * 60000); continue; }
+      if (j < 0) {
+        const nw = nextWindow(queue.slice(i));
+        setMsg("send-msg", nw ? `It's outside working hours for everyone left (Mon–Fri, 8 AM–5 PM their time). Sending starts by itself on ${whenText(nw.at)} your time, when it's 8 AM in ${regionName(countryOf(nw.r))}. ${sent} sent so far. Keep this tab open (or untick "Only send in their working hours" to send now).`
+          : "Outside working hours for everyone left.");
+        await sleep(nw ? Math.max(60000, nw.at - Date.now() + 5000) : 15 * 60000); continue;
+      }
       if (j > i) queue.splice(i, 0, queue.splice(j, 1)[0]);
     }
     const r = queue[i];
