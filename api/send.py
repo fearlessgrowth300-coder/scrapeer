@@ -146,7 +146,7 @@ def send_resend(body):
         raise Bad("Subject and message can't be empty.")
     unsub = reply_to or sender
     text, html = with_extras(body, text)
-    payload = {"from": formataddr((one_line(acct.get("from_name"), 80), sender)), "to": [to], "subject": subject,
+    payload = {"from": formataddr((sender_name(acct), sender)), "to": [to], "subject": subject,
                "text": text, "headers": {}}
     if not body.get("plain"):
         payload.update(html=html, headers={"List-Unsubscribe": f"<mailto:{unsub}?subject=unsubscribe>"})
@@ -162,6 +162,12 @@ def send_resend(body):
         msg = data.get("message") or f"HTTP {code}"
         raise Bad(("Resend refused the API key: " if code in (401, 403) else "Resend: ") + str(msg)[:200])
     return {"ok": True, "id": data.get("id")}
+
+
+def sender_name(acct):
+    """The name people see. ALL CAPS ("DEBORAH DOLAPO") reads as shouting/spam → "Deborah Dolapo"."""
+    name = one_line(acct.get("from_name"), 80)
+    return name.title() if name.isupper() and len(name) > 3 else name
 
 
 def html_twin(text):
@@ -262,7 +268,7 @@ def send(body):
         if not subject or not text.strip():
             raise Bad("Subject and message can't be empty.")
         msg = EmailMessage()
-        msg["From"] = formataddr((one_line(acct.get("from_name"), 80), user))
+        msg["From"] = formataddr((sender_name(acct), user))
         msg["To"] = to
         msg["Subject"] = subject
         msg["Message-ID"] = make_msgid(domain=user.split("@")[1])
