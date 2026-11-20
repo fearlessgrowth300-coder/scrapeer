@@ -54,6 +54,5 @@ if __name__ == "__main__":
         import _jobs
         _jobs.resume()
     except Exception as e:
-        sys.stderr.write(f"resume failed: {e}
-")
+        sys.stderr.write("resume failed: " + str(e) + chr(10))
     ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1]) if len(sys.argv) > 1 else 8790), App).serve_forever()
