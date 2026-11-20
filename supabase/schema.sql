@@ -52,3 +52,19 @@ create table if not exists public.scrapeer_push (
 create index if not exists scrapeer_push_user on public.scrapeer_push (user_id);
 alter table public.scrapeer_push enable row level security;
 revoke all on public.scrapeer_push from anon, authenticated;
+
+-- Background searches and sending (run on the VPS, keep going when the app is closed)
+create table if not exists public.scrapeer_jobs (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references auth.users (id) on delete cascade,
+  kind       text not null,
+  status     text not null default 'running',
+  input      jsonb not null default '{}',
+  progress   jsonb not null default '{}',
+  result     jsonb not null default '{}',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists scrapeer_jobs_user on public.scrapeer_jobs (user_id, kind, created_at desc);
+alter table public.scrapeer_jobs enable row level security;
+revoke all on public.scrapeer_jobs from anon, authenticated;

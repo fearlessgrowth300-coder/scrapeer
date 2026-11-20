@@ -184,6 +184,7 @@ input,textarea,select{font-size:16px!important}
       <div class="hint" id="count">0 websites</div>
       <button class="primary wide" id="go" style="margin-top:12px">Find emails</button>
       <div class="msg err" id="err" role="alert"></div>
+      <div class="msg" id="find-msg" role="status"></div>
       <div class="bar" aria-hidden="true"><i id="fill"></i></div>
       <div class="stats" aria-live="polite">
         <div><b id="done">0</b>sites done</div><div><b id="found">0</b>emails</div><div><b id="failed">0</b>failed</div>
@@ -336,7 +337,7 @@ input,textarea,select{font-size:16px!important}
         <div class="field"><label for="cap">Overall max per day</label><input type="number" id="cap" placeholder="no extra limit" min="1"></div>
       </div>
       <div class="field"><label for="safecap">Max per account per day (warm-up)</label><input type="number" id="safecap" value="50" min="1" placeholder="each account's own limit"></div>
-      <p class="hint" style="margin-top:-4px">New domains land in Primary more when each address sends little: keep 30–50 a day per account for the first weeks, then raise it by about 20 a week. For more volume, add more accounts on other domains instead of raising this. Keep this tab open while sending.</p>
+      <p class="hint" style="margin-top:-4px">New domains land in Primary more when each address sends little: keep 30–50 a day per account for the first weeks, then raise it by about 20 a week. For more volume, add more accounts on other domains instead of raising this. Sending runs on the server: once started you can close the app or lock your phone.</p>
       <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="plainmail" checked> Plain email: text only, no logo or open tracking (more likely to reach Inbox, not Promotions)</label>
       <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="translate" checked> Translate each email into the store's language (German store → German email). Write in English; the preview shows the translation.</label>
       <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="workhours" checked> Only send in their working hours (Mon–Fri, 8 AM–5 PM in their country)</label>
@@ -487,29 +488,40 @@ async function post(url, body, tries = 2) {
   }
 }
 
+// the search runs on the server: closing the app or locking the phone doesn't stop it
+let searchJob = null, searchHave = 0, searchTimer = null;
 $("go").onclick = async () => {
+  if (searchJob) { $("go").disabled = true; await post("/api/jobs", {action: "stop", kind: "search"}, 1); return; }
   const sites = siteList();
   if (!sites.length) { $("err").textContent = "Paste at least one website."; return; }
-  $("err").textContent = ""; results = []; failed = []; renderFind();
-  $("go").disabled = $("sites").disabled = true; $("go").textContent = "Searching…";
-  let done = 0; const seen = new Set(), queue = [...sites];
-  const tick = () => { $("done").textContent = done + "/" + sites.length; $("failed").textContent = failed.length;
-                       $("fill").style.width = (100 * done / sites.length) + "%"; };
-  tick();
-  const worker = async () => {
-    while (queue.length) {
-      const site = queue.shift(), data = await post("/api/scrape", {site});
-      if (data.error) failed.push(site);
-      for (const e of data.emails || []) if (!seen.has(e.email)) { seen.add(e.email); results.push(e); }
-      results.sort((a, b) => b.score - a.score);
-      done++; tick(); renderFind();
-    }
-  };
-  await Promise.all(Array.from({length: Math.min(6, sites.length)}, worker));
-  // last 5 searches saved to the account so they show on any device
-  store.set("scrapeer-scrapes", [{at: Date.now(), sites, failed, results}, ...store.get("scrapeer-scrapes", [])].slice(0, 5));
-  $("go").disabled = $("sites").disabled = false; $("go").textContent = "Find emails";
+  $("err").textContent = "";
+  const d = await post("/api/jobs", {action: "start_search", sites}, 1);
+  if (d.error) { $("err").textContent = d.error; return; }
+  results = []; failed = []; searchJob = d.job; searchHave = 0; renderFind(); watchSearch();
 };
+async function watchSearch(boot) {
+  clearTimeout(searchTimer);
+  const d = await post("/api/jobs", {action: "status", job: searchJob, have: searchHave}, 1);
+  const j = d.search;
+  if (d.error || !j) { if (!boot) searchTimer = setTimeout(watchSearch, 10000); return; }
+  if (j.id !== searchJob) { searchJob = j.id; searchHave = 0; results = []; }
+  if (j.input?.sites?.length) { $("sites").value = j.input.sites.join("\n"); $("sites").oninput(); }
+  const seen = new Set(results.map(r => r.email));
+  for (const e of j.result.results) if (!seen.has(e.email)) { seen.add(e.email); results.push(e); }
+  searchHave += j.result.results.length; failed = j.result.failed || [];
+  results.sort((a, b) => b.score - a.score);
+  const p = j.progress || {}, total = p.total || 0, running = j.status === "running";
+  $("done").textContent = (p.done || 0) + "/" + total; $("failed").textContent = failed.length; $("fill").style.width = (total ? 100 * (p.done || 0) / total : 0) + "%";
+  renderFind();
+  $("sites").disabled = running; $("go").disabled = false; $("go").textContent = running ? "Stop search" : "Find emails";
+  setMsg("find-msg", running ? "Searching on the server — you can close the app or lock your phone, it keeps going." : "");
+  if (running) { searchTimer = setTimeout(watchSearch, document.hidden ? 20000 : 3000); return; }
+  // finished: keep it in the last 5 searches (once)
+  const prev = store.get("scrapeer-scrapes", []);
+  if (!prev.some(s => s.job === j.id) && results.length)
+    store.set("scrapeer-scrapes", [{at: Date.now(), sites: siteList(), failed, results, job: j.id}, ...prev].slice(0, 5));
+  searchJob = null;
+}
 $("copy").onclick = async () => {
   await navigator.clipboard.writeText(visible().map(r => r.email).join("\n"));
   $("copy").textContent = "Copied!"; setTimeout(() => $("copy").textContent = "Copy", 1500);
@@ -999,7 +1011,6 @@ const regionName = c => { try { return new Intl.DisplayNames(["en"], {type: "reg
 const capOf = a => Math.min(a.cap, Number($("safecap").value) || Infinity);
 let sending = false, wake = null;
 const sleep = ms => new Promise(res => { const t = setTimeout(res, ms); wake = () => { clearTimeout(t); res(); }; });
-$("send-stop").onclick = () => { sending = false; wake?.(); };
 $("send-start").onclick = async () => {
   parseRecips();
   const blocked = dneSet(), stores = sentStores(), all = onePerStore(recipients.filter(r => !blocked.has(r.email) && !wrongDesk(r.email) && !alreadyDone(r, stores)));
@@ -1025,69 +1036,44 @@ $("send-start").onclick = async () => {
   const rounds = (plan.length ? "\n\n" + plan.map((p, n) => `Round ${n + 1}: "${p.tpl}" → ${fresh.filter(r => r.round === p).length} people`).join("\n") : "")
     + (fus.length ? `\n\nFirst: ${fus.length} follow-up(s) to people who haven't replied.` : "");
   if (!confirm(`Send to ${queue.length} people? Uses ${pool[0].label} first; when it's full for the day the next account takes over.${rounds}`)) return;
-  sending = true; $("send-start").disabled = $("send-test").disabled = true; $("send-stop").disabled = false;
-  let sent = 0, fails = 0, done = 0, consecutiveFails = 0, stopReason = "", i = 0;
-  const runSent = [];
-  // first account in your order that still has room today (and works) — fill it, then move to the next
-  const pick = () => pool.find(a => !full.has(a.id) && !broken.has(a.id) && sentTodayVia(a.label) < capOf(a)) || null;
-  // daily counts reset at midnight UTC (that's when the providers reset too); +1 min margin
-  const waitForTomorrow = async why => {
-    const until = new Date(); until.setUTCHours(24, 1, 0, 0);
-    setMsg("send-msg", `${why} ${sent} sent so far. Continuing automatically at ${until.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})} on ${until.toLocaleDateString()} — keep this tab open (or press Start again tomorrow; nobody gets emailed twice).`, "err");
-    renderAccounts(); await sleep(Math.max(60000, until - Date.now())); full.clear(); renderAccounts();
-  };
-  while (i < queue.length && sending) {
-    if (tooManyBounces(runSent, bouncedNow)) { stopReason = "Stopped to protect your domain: 3 of your latest 20 emails bounced. Check your list before sending more."; break; }
-    if ($("workhours").checked) {  // next person whose working day it is; nobody → wait
-      const j = queue.findIndex((x, k) => k >= i && inWorkHours(x));
-      if (j < 0) {
-        const nw = nextWindow(queue.slice(i));
-        setMsg("send-msg", nw ? `It's outside working hours for everyone left (Mon–Fri, 8 AM–5 PM their time). Sending starts by itself on ${whenText(nw.at)} your time, when it's 8 AM in ${regionName(countryOf(nw.r))}. ${sent} sent so far. Keep this tab open (or untick "Only send in their working hours" to send now).`
-          : "Outside working hours for everyone left.");
-        await sleep(nw ? Math.max(60000, nw.at - Date.now() + 5000) : 15 * 60000); continue;
-      }
-      if (j > i) queue.splice(i, 0, queue.splice(j, 1)[0]);
-    }
-    const r = queue[i];
-    if ((!r.fu && alreadyDone(r)) || dneSet().has(r.email)) { i++; done++; continue; }  // bounced/spam-flagged meanwhile
-    const sentToday = log.filter(l => l.date === today() && l.status === "sent").length;
-    if (sentToday >= cap) { await waitForTomorrow(`Your overall limit of ${cap} for today is reached.`); continue; }
-    let d, a;
-    while ((a = pick())) {  // a full or broken account hands the SAME person to the next account
-      setMsg("send-msg", `Sending to ${r.email} via ${a.label}…`);
-      const m = await localized(r);
-      if (m.trError) { d = {error: "translation failed: " + m.trError}; break; }  // never send English to a German store by accident
-      d = await post("/api/send", {account_id: a.id, to: r.email, subject: m.subject, body: m.body, reply_to: replyAddr(), signature: sigPayload(), plain: $("plainmail").checked,
-                                   check: true, in_reply_to: r.inReplyTo || ""}, 1);
-      if (d.error && /daily|limit|quota|exceeded/i.test(d.error)) { full.add(a.id); record(r.email, "failed", "account full today: " + d.error, a.label); continue; }
-      if (d.error && /Login refused|connect to|API key|domain|verified|not allowed|suspend/i.test(d.error)) { broken.add(a.id); record(r.email, "failed", "account skipped: " + d.error, a.label); continue; }
-      break;
-    }
-    if (!a) {
-      if (broken.size === pool.length) { stopReason = "None of your accounts can send right now — check them in step 1 (details in the log)."; break; }
-      await waitForTomorrow("All accounts reached today's limit."); continue;
-    }
-    if (d.skipped) { record(r.email, "skipped", d.skipped, a.label); addDne(r.email); i++; done++; $("send-fill").style.width = (100 * done / queue.length) + "%"; continue; }
-    if (d.error) {
-      fails++; consecutiveFails++; record(r.email, "failed", d.error, a.label);
-      if (consecutiveFails >= 5) { stopReason = "Stopped after 5 failures in a row: " + d.error; break; }
-    } else { sent++; runSent.push(r.email); consecutiveFails = 0; { const m = await localized(r); record(r.email, "sent", r.fu ? "follow-up " + r.fu : "", a.label, m.subject, m.body, d.message_id); if (r.fu) { log[0].fu = r.fu; store.set("scrapeer-log", log); }
-      if (host(r.site)) { const s = sentMap(); s["site:" + host(r.site)] = today(); store.set("scrapeer-sent", s); }
-      if (r.round) { r.round.done = (r.round.done || 0) + 1; saveDraft(); renderPlan(); } } }
-    i++; done++;
-    $("st-sent").textContent = sent; $("st-failed").textContent = fails; $("send-fill").style.width = (100 * done / queue.length) + "%";
-    if (done < queue.length && sending) {
-      const wait = Math.round(lo + Math.random() * Math.max(0, (hi || lo) - lo));
-      setMsg("send-msg", `Sent ${sent} of ${queue.length}. Next email in ${wait}s… (keep this tab open)`);
-      await sleep(wait * 1000);
-    }
-  }
-  if (stopReason) setMsg("send-msg", `${stopReason} (${sent} sent this run)`, "err");
-  else if (sending && done === queue.length) setMsg("send-msg", `Done — ${sent} sent, ${fails} failed.`, fails ? "err" : "ok");
-  else if (!sending) setMsg("send-msg", `Paused — ${sent} sent. Press Start to continue with the rest.`);
-  sending = false; $("send-start").disabled = $("send-test").disabled = false; $("send-stop").disabled = true;
-  parseRecips(); showFuDue();
+  // write every email now (names, variants, translation), then the server sends them with the waits, limits and working hours
+  $("send-start").disabled = true;
+  const items = new Array(queue.length); let k = 0, bad = "";
+  await Promise.all(Array.from({length: 6}, async () => { while (k < queue.length && !bad) { const n = k++, r = queue[n], m = await localized(r);
+    if (m.trError) { bad = `Couldn't translate the email to ${r.email}: ${m.trError}`; return; }
+    items[n] = {email: r.email, subject: m.subject, body: m.body, site: r.site || "", tz: tzOf(r), fu: r.fu || 0,
+                round: r.round ? plan.indexOf(r.round) : null, in_reply_to: r.inReplyTo || ""};
+    setMsg("send-msg", `Preparing emails… ${Math.min(k, queue.length)}/${queue.length}`); } }));
+  if (bad) { $("send-start").disabled = false; return setMsg("send-msg", bad + " Nothing was sent.", "err"); }
+  const d = await post("/api/jobs", {action: "start_send", items, plan_base: plan.map(p => p.done || 0), settings: {
+    pool: pool.map(a => ({id: a.id, label: a.label, cap: Math.min(a.cap, capOf(a))})), lo, hi, cap: isFinite(cap) ? cap : null,
+    workhours: $("workhours").checked, plain: $("plainmail").checked, signature: sigPayload(), reply_to: replyAddr()}}, 1);
+  if (d.error) { $("send-start").disabled = false; return setMsg("send-msg", d.error, "err"); }
+  sendJob = d.job; watchSend();
 };
+let sendJob = null, sendTimer = null, sendSeen = -1;
+$("send-stop").onclick = async () => { $("send-stop").disabled = true; await post("/api/jobs", {action: "stop", kind: "send"}, 1); watchSend(); };
+async function watchSend(boot) {
+  clearTimeout(sendTimer);
+  const d = await post("/api/jobs", {action: "status"}, 1), j = d.send;
+  if (d.error || !j) { if (!boot && sendJob) sendTimer = setTimeout(watchSend, 15000); return; }
+  const p = j.progress || {}, running = j.status === "running";
+  if (running || j.id === sendJob) {
+    $("st-sent").textContent = p.sent || 0; $("st-failed").textContent = p.failed || 0;
+    $("send-fill").style.width = (p.total ? 100 * (p.i || 0) / p.total : 0) + "%";
+    if (p.msg) setMsg("send-msg", p.msg, /Stopped|error/i.test(p.msg) ? "err" : /^Done/.test(p.msg) && !p.failed ? "ok" : "");
+    // rounds: what was done before this run + what this run sent
+    const base = j.input?.plan_base;
+    if (Array.isArray(base) && store.get("scrapeer-draft", {}).planJob !== j.id + (running ? "" : ":end")) {
+      plan.forEach((r, n) => { if (base[n] != null) r.done = base[n] + ((p.rounds || {})[n] || 0); });
+      renderPlan(); saveDraft(); if (!running) store.set("scrapeer-draft", {...store.get("scrapeer-draft", {}), planJob: j.id + ":end"});
+    }
+    if ((p.sent || 0) + (p.failed || 0) !== sendSeen) { sendSeen = (p.sent || 0) + (p.failed || 0); saveState(); }  // pull the server's log into this tab
+  }
+  $("send-start").disabled = running; $("send-test").disabled = false; $("send-stop").disabled = !running;
+  if (running) { sendJob = j.id; sendTimer = setTimeout(watchSend, document.hidden ? 30000 : 5000); }
+  else if (sendJob) { sendJob = null; parseRecips(); showFuDue(); }
+}
 
 /* ---------- INBOX: WhatsApp/Spike-style chats — one chat per (sending account, person) ---------- */
 const resendAccounts = () => accounts.filter(a => a.provider === "resend");
@@ -1392,7 +1378,7 @@ async function pollEvents() {
   else if (d.events.length) { renderConvos(); if (activeKey) renderThread(); }
 }
 function startLive() {
-  clearInterval(liveTimer); pollEvents(); loadInbox(true); showFuDue();  // starts the inbox auto-refresh right after sign-in
+  clearInterval(liveTimer); pollEvents(); loadInbox(true); showFuDue(); watchSearch(true); watchSend(true);  // pick up runs going on the server  // starts the inbox auto-refresh right after sign-in
   // every 10s while you're looking, every 40s in the background (pop-ups/desktop alerts still arrive)
   let n = 0; liveTimer = setInterval(() => { n++; if (!document.hidden || n % 4 === 0) pollEvents(); if (!$("inbox").hidden) { renderConvos(); if (activeKey) renderThread(); } }, 10000);
 }

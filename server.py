@@ -50,4 +50,10 @@ class App(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     ThreadingHTTPServer.daemon_threads = True
+    try:  # carry on with searches/sending that were running before a restart
+        import _jobs
+        _jobs.resume()
+    except Exception as e:
+        sys.stderr.write(f"resume failed: {e}
+")
     ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1]) if len(sys.argv) > 1 else 8790), App).serve_forever()
